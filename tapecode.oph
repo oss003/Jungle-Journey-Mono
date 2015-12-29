@@ -1,0 +1,37 @@
+; Copyright (C) 2011 David Boddie <david@boddie.org.uk>
+;
+; This program is free software: you can redistribute it and/or modify
+; it under the terms of the GNU General Public License as published by
+; the Free Software Foundation, either version 3 of the License, or
+; (at your option) any later version.
+;
+; This program is distributed in the hope that it will be useful,
+; but WITHOUT ANY WARRANTY; without even the implied warranty of
+; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+; GNU General Public License for more details.
+;
+; You should have received a copy of the GNU General Public License
+; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+;.org $1e00
+;.include "mapcode.oph"
+
+tile_addresses_low:  .byte <flowers,<leaf1,<leaf2,<exit1,<exit2,<finalexit1,<finalexit2
+tile_addresses_high: .byte >flowers,>leaf1,>leaf2,>exit1,>exit2,>finalexit1,>finalexit2
+
+player_direction_chars_low: .byte <left1,<left2,<right1,<right2,<up1,<up2
+                            .byte <down1,<down2,<demise1,<demise2,<demise3,<demise4
+player_direction_chars_high: .byte >left1,>left2,>right1,>right2,>up1,>up2
+                             .byte >down1,>down2,>demise1,>demise2,>demise3,>demise4
+
+enemy_direction_chars_low:  .byte <birdld1,<birdld2,<birdld3,<birdld4,<birdrd1,<birdrd2,<birdrd3,<birdrd4
+enemy_direction_chars_high: .byte >birdld1,>birdld2,>birdld3,>birdld4,>birdrd1,>birdrd2,>birdrd3,>birdrd4
+
+emerge_explode_chars_low:  .byte <emerge1,<emerge2,<emerge3,<emerge4,<explode1,<explode2,<explode3,<explode4
+emerge_explode_chars_high: .byte >emerge1,>emerge2,>emerge3,>emerge4,>explode1,>explode2,>explode3,>explode4
+
+item_chars_low:  .byte <weapons1,<weapons2,<weapons3,<weapons4,<key,<chest,<statue,<jewel,<health
+item_chars_high: .byte >weapons1,>weapons2,>weapons3,>weapons4,>key,>chest,>statue,>jewel,>health
+
+projectile_chars_low: .byte <ball1,<ball2,<boomerang1,<boomerang2,<mace1,<mace2,<fire1,<fire2
+projectile_chars_high: .byte >ball1,>ball2,>boomerang1,>boomerang2,>mace1,>mace2,>fire1,>fire2

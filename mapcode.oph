@@ -1,0 +1,5603 @@
+; Copyright (C) 2011 David Boddie <david@boddie.org.uk>
+;
+; This program is free software: you can redistribute it and/or modify
+; it under the terms of the GNU General Public License as published by
+; the Free Software Foundation, either version 3 of the License, or
+; (at your option) any later version.
+;
+; This program is distributed in the hope that it will be useful,
+; but WITHOUT ANY WARRANTY; without even the implied warranty of
+; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+; GNU General Public License for more details.
+;
+; You should have received a copy of the GNU General Public License
+; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+jmp main
+
+seeds:         .byte 100, 239, 183, 144   ; $ef, $b7, $90, $d6, $89
+start_rooms_x: .byte 5,   3,   5,   10
+start_rooms_y: .byte 5,   8,   1,   8
+exit_rooms_x:  .byte 7,   9,   3,   0
+exit_rooms_y:  .byte 0,   0,   9,   10
+
+; These values need to be kept in sync - the room numbers must match their
+; positions in the room array.
+key_rooms_x:   .byte 1,   5,  10,   1
+key_rooms_y:   .byte 0,   2,   6,   4
+key_rooms:     .byte 1,  27,  76,  45  ; ky*11 + kx
+
+treasure_table:  .byte 6, 5, 7, 1, 1, 5, 2, 7, 6, 2, 1, 7, 1, 7, 8, 7
+treasure_table_: .byte 0, 7, 6, 7, 7, 7, 5, 0, 6, 3, 7, 7, 5, 7, 5, 0
+
+unlimited_values:   ; $7c,$7d=first,second
+                    ; Add $7c and $7d, store the result in $7d and the original
+                    ; $7d value in $7c, returning the sum in the accumulator.
+    lda $7c
+    sta $7b
+    lda $7d
+    sta $7c
+    adc $7b
+    sta $7d
+    clc
+    rts
+
+mod9:               ; A = value
+    divide_loop:
+        cmp #9
+        bcc after_divide_loop   ; bmi should work here, I think, but it doesn't
+        sec
+        sbc #9
+        jmp divide_loop
+
+after_divide_loop:
+    clc
+    rts             ; A % 9
+
+tile_values_map: .byte 0,1,0,0,0,0,2,3
+
+next_value:         ; no argument
+    jsr unlimited_values
+    lda $7d
+    jsr mod9
+    and #7          ; (next value % 9) & 7
+    tax
+    lda tile_values_map,x
+    sta $7b
+    rts
+
+; Room filling routines, writing to 0x579c to 0x57ff.
+
+draw_top_line:      ; $76=tile number for exit/wall
+    ldx #9
+    lda #2
+
+    draw_top_line_loop0:
+        sta L579c,x
+        dex
+        bpl draw_top_line_loop0
+
+    ldx #3                      ; draw the exit or wall
+    lda $76
+    draw_top_line_loop1:
+        sta L579c+3,x
+        dex
+        bpl draw_top_line_loop1
+    clc
+    rts
+
+draw_left_line:     ; $77=tile number for exit/wall
+    ldx #90
+    draw_left_line_loop0:
+        lda #2
+        sta L579c,x
+        txa
+        sec
+        sbc #10
+        tax
+        bpl draw_left_line_loop0
+
+    ldx #30
+    draw_left_line_loop1:
+        lda $77
+        sta L579c+30,x
+        txa
+        sec
+        sbc #10
+        tax
+        bpl draw_left_line_loop1
+    clc
+    rts
+
+draw_bottom_line:       ; $76=tile number for exit/wall
+    ldx #9
+    lda #2
+    draw_bottom_line_loop0:
+        sta L579c+90,x
+        dex
+        bpl draw_bottom_line_loop0
+
+    ldx #3
+    lda $76
+    draw_bottom_line_loop1:
+        sta L579c+93,x
+        dex
+        bpl draw_bottom_line_loop1
+    clc
+    rts
+
+draw_right_line:        ; $77=tile number for exit/wall
+    ldx #99
+    draw_right_line_loop0:
+        lda #2
+        sta L579c,x
+        txa
+        sec
+        sbc #10
+        tax
+        bpl draw_right_line_loop0
+
+    ldx #30
+    draw_right_line_loop1:
+        lda $77
+        sta L579c+39,x
+        txa
+        sec
+        sbc #10
+        tax
+        bpl draw_right_line_loop1
+    clc
+    rts
+
+make_empty_room:
+
+    ldx #99
+    make_empty_room_loop:
+        lda #0
+        sta L579c,x
+        dex
+        bpl make_empty_room_loop
+    
+    rts
+
+make_room:          ; $78,$79=i,j
+
+    ; Fills the room array at 579c with values.
+    ; Tiles 0,1,2,3 are map tiles that will be shown by the plot_tile routine.
+    ; Other tiles are plotted separately:
+    ;   4 = exit
+    ;   5 = final exit
+    ;   6 = weapon (bits 3,4 are type)
+    ;   7 = treasure (bits 3,4 are type)
+
+    ; Fill the room with empty space.
+
+    jsr make_empty_room
+
+
+    ; Determine if there is a top exit.
+
+    lda #0
+    sta $76
+
+    lda $78         ; i == 0
+    cmp #0
+    bne not_top_screen
+    lda #2
+    sta $76
+    jmp do_top_exit
+
+    not_top_screen:
+    clc
+
+    lda $78
+    and #7          ; i & 7
+    sta $70         ; temporary result
+    lda $79
+    and #7          ; j & 7
+    cmp $70
+    beq do_top_exit
+    clc
+
+    lda $78
+    eor $79         ; i ^ j
+    adc $78         ; + i
+    clc
+    cmp $79         ; (i ^ j) + i == j
+    bne do_top_exit
+    lda #2
+    sta $76         ; top exit
+
+    do_top_exit:
+    jsr draw_top_line
+
+    ; Determine if there is a left exit.
+    lda #0
+    sta $77
+
+    lda $79
+    cmp #0
+    bne not_left_screen
+    lda #2
+    sta $77
+    jmp do_left_exit
+
+    not_left_screen:
+    clc
+
+    lda $78
+    and #3          ; i & 3
+    sta $70         ; temporary result
+    lda $79
+    and #3          ; j & 3
+    cmp $70
+    beq do_left_exit
+    clc
+
+    lda $78
+    ora $79         ; i | j
+    eor $79         ; ^ j
+    cmp $78         ; (i | j) ^ j == i
+    bne do_left_exit
+    lda #2
+    sta $77         ; left exit
+
+    do_left_exit:
+    jsr draw_left_line
+
+    ; Determine if there is a right exit.
+    lda #0
+    sta $77
+
+    lda $79
+    cmp #10
+    bne not_right_screen
+    lda #2
+    sta $77
+    jmp do_right_exit
+
+    not_right_screen:
+    clc
+
+    lda $78
+    and #3          ; i & 3
+    sta $70         ; temporary result
+    lda $79
+    adc #1
+    and #3          ; j & 3
+    cmp $70
+    beq do_right_exit
+    clc
+
+    lda $79
+    adc #1
+    sta $70
+
+    lda $78
+    ora $70         ; i | j
+    eor $70         ; ^ j
+    cmp $78         ; (i | j) ^ j == i
+    bne do_right_exit
+    lda #2
+    sta $77         ; right exit
+
+    do_right_exit:
+    jsr draw_right_line
+
+    ; Determine if there is a bottom exit.
+    lda #0
+    sta $76
+
+    lda $78
+    cmp #10
+    bne not_bottom_screen
+    lda #2
+    sta $76
+    jmp do_bottom_exit
+
+    not_bottom_screen:
+    clc
+
+    lda $78
+    adc #1
+    and #7          ; i & 7
+    sta $70         ; temporary result
+    lda $79
+    and #7          ; j & 7
+    cmp $70
+    beq do_bottom_exit
+    clc
+
+    lda $78
+    adc #1
+    sta $70
+
+    eor $79         ; i ^ j
+    adc $70         ; + i
+    cmp $79         ; (i ^ j) + i == j
+    bne do_bottom_exit
+    lda #2
+    sta $76         ; bottom exit
+
+    do_bottom_exit:
+    jsr draw_bottom_line
+
+    ; Add the final exit.
+
+    lda L578a
+    cmp #3
+    bmi make_room_no_final_exit
+
+    lda $78
+    cmp #0
+    bne make_room_no_final_exit
+
+    lda $79
+    cmp #2
+    bne make_room_no_final_exit
+
+    lda #6
+    sta L579c+4
+    lda #7
+    sta L579c+5
+
+    make_room_no_final_exit:
+
+    ; Make sure that the starting, exit, key rooms are empty.
+
+    ldx L578a               ; level number
+    lda start_rooms_y,x
+    cmp $78
+    bne make_room_not_starting_room
+    lda start_rooms_x,x
+    cmp $79
+    bne make_room_not_starting_room
+
+    lda #3
+    sta $70
+    jmp add_room_decoration ; optimise away the rts
+
+    make_room_not_starting_room:
+
+    lda exit_rooms_y,x
+    cmp $78
+    bne make_room_not_exit_room
+    lda exit_rooms_x,x
+    cmp $79
+    bne make_room_not_exit_room
+
+    ; Add an exit to the room.
+    lda $78
+    eor $79
+    and #15
+    tax
+    lda exit_room_offsets,x
+    tax
+    lda L5780
+    and #1
+    beq exit_not_open
+
+    lda #5
+    sta L579c,x
+    jmp exit_decoration
+
+    exit_not_open:
+    clc
+    lda #4
+    sta L579c,x
+
+    exit_decoration:
+    lda #3
+    sta $70
+    jmp add_room_decoration ; optimise away the rts
+
+    make_room_not_exit_room:
+
+    lda key_rooms_y,x
+    cmp $78
+    bne make_room_not_key_room
+    lda key_rooms_x,x
+    cmp $79
+    bne make_room_not_key_room
+
+    lda #1
+    sta $70
+    jmp add_room_decoration ; optimise away the rts
+
+    make_room_not_key_room:
+    clc
+
+    ; Fill in the room details.
+
+    lda $79
+    sta $7c
+    sec
+    ldx L578a
+    lda seeds,x
+    sbc $78
+    sec
+    sta $7d
+    clc
+
+    ; Discard the first ten values.
+
+    ldy #10
+    make_room_loop0:
+        jsr unlimited_values
+        dey
+        bne make_room_loop0
+    
+    ; Fill the room array with values.
+
+    lda #<(L579c+11)		;$57a7
+    sta $70
+    lda #>(L579c+11)
+    sta $71
+
+    ldy #0
+    make_room_loop1:
+
+        jsr next_value
+        sta ($70),y
+        iny
+        cpy #8
+        bne make_room_loop1     ; continue the same row
+
+        lda $70
+        cmp #<(L579c+11+7*10)
+        beq make_room_loop1_exit    ; exit after the last row
+
+        adc #10
+        sta $70
+        ldy #0                  ; reset the row counter
+        jmp make_room_loop1
+    
+    make_room_loop1_exit:
+    rts
+
+decoration_offsets: .byte 11,18,81,88
+
+add_room_decoration:
+
+    lda #<L579c			;$579c
+    sta $8e
+    lda #>L579c
+    sta $8f
+    
+    ldx #3
+    add_room_decoration_loop:
+
+        lda decoration_offsets,x
+        tay
+        lda $70
+        sta ($8e),y
+        dex
+        bpl add_room_decoration_loop
+    
+    clc
+    rts
+
+exit_room_offsets:  .byte 35,66,63,56,34,44,64,33,36,55,65,53,45,46,54,43
+treasure_x:         .byte 3, 2, 4, 8, 2, 5, 4, 1, 3, 8, 6, 5, 7, 1, 7, 6
+treasure_y:         .byte 1, 3, 7, 7, 2, 3, 6, 1, 4, 6, 8, 5, 5, 4, 8, 2
+
+eleven_times_table: .byte 0, 11, 22, 33, 44, 55, 66, 77, 88, 99, 110
+
+add_treasure:               ; $78,$79 = i,j
+
+    lda $78
+    tax
+    lda eleven_times_table,x
+    adc $79
+    tax
+
+    lda L5200,x
+    ora #$80
+    sta L5200,x         ; set the top bit (room visited)
+    and #$7f            ; mask off the top bit to obtain the item number + 1
+    cmp #0
+    beq add_treasure_exit
+
+    sec
+    sbc #1
+    sta L5280+$d           ; store weapon/treasure type
+    clc
+
+    lda $78
+    eor $79
+    adc L5280+$d
+    and #15
+    sta $70
+
+    lda #15
+    sta $8c
+    ldy #0
+    add_treasure_loop:
+
+        clc
+
+        ldx $70
+        lda treasure_y,x    ; y
+        sta $8d
+        tax
+        lda room_row_offsets_low,x
+        sta $80
+        lda room_row_offsets_high,x
+        sta $81
+
+        ldx $70
+        lda treasure_x,x    ; x
+        sta $8e
+        adc $80
+        sta $80
+
+        lda $81
+        adc #0
+        sta $81
+        clc
+
+        lda ($80),y         ; tile
+        cmp #0
+        bne add_treasure_loop_next
+
+        lda #4              ; type (weapon/treasure)
+        sta L5280+$c
+        lda $8d             ; y
+        sta L5280+$e
+        lda #1              ; dy
+        sta L5280+$f
+        lda $8e             ; x
+        sta L5280+$10		; $5290
+        lda #0              ; dx
+        sta L5280+$11
+
+        lda #<(L5280+$c)		;$528c
+        sta $74
+        lda #>(L5280+$c)	
+        sta $75
+        jmp plot_character  ; optimise away the rts
+
+        add_treasure_loop_next:
+        dec $8c
+        bmi add_treasure_exit
+
+        dec $70
+        bpl add_treasure_loop
+
+        lda #15
+        sta $70
+        jmp add_treasure_loop
+
+    add_treasure_exit:
+    clc
+    rts
+
+create_enemy_positions:
+
+    lda #31     ; counter
+    sta $7e
+
+    lda #1      ; x
+    sta $70
+
+    lda #1      ; y
+    sta $71
+
+    lda #<(L579c+11)		;$57a7
+    sta $72
+    lda #>(L579c+11)
+    sta $73
+
+    ldx #15     ; offset into position areas
+    ldy #0
+
+    create_enemy_positions_loop:
+
+        jsr unlimited_values
+        and #7
+        sta $80     ; store temporarily
+
+        lda $72
+        adc $80
+        sta $72     ; update the offset into the room data
+        clc
+
+        lda $70
+        adc $80     ; update x
+        cmp #10
+        bpl create_enemy_positions_next_row
+
+        sta $70     ; store x
+        jmp create_enemy_positions_check_tile
+
+        create_enemy_positions_next_row:
+
+        sec
+        sbc #10
+        sta $70     ; store the x position on the next row
+        clc
+
+        lda $71
+        adc #1      ; update the y position
+        cmp #10
+        bpl create_enemy_positions_to_top
+
+        sta $71     ; store the y position for the next row
+        jmp create_enemy_positions_check_tile
+
+        create_enemy_positions_to_top:
+
+        lda #1      ; reset the x, y and offset values
+        sta $70
+        sta $71
+        lda #<(L579c+11)	; $a7
+        sta $72
+
+        create_enemy_positions_check_tile:
+
+        lda ($72),y
+        cmp #0
+        bne create_enemy_positions_next
+
+        lda $70
+        sta L0ee0,x                     ; store the x value
+
+        lda $71
+        sta L0ef0,x                     ; store the y value
+
+        dex
+        bmi create_enemy_positions_exit
+
+        create_enemy_positions_next:
+        clc
+        dec $7e
+        bpl create_enemy_positions_loop
+
+    ; The position areas were not filled. Write invalid values into the
+    ; first area for the emerge routine to find.
+
+    lda #0
+    create_enemy_positions_fill_loop:
+
+        sta L0ee0,x
+        dex
+        bpl create_enemy_positions_fill_loop
+
+    create_enemy_positions_exit:
+    clc
+    rts
+
+plot:               ; $70,$71=source address
+                    ; $72,$73=destination address
+	ldx #0
+plot_loop1:
+	ldy sprtab,x
+        lda ($70),y
+	ldy vtab,x
+	sta ($72),y
+
+	ldy sprtab+8,x
+	lda ($70),y
+	ldy vtab,x
+	iny
+	sta ($72),y
+
+	ldy sprtab+16,x
+	lda ($70),y
+	ldy vtab,x
+	iny
+	iny
+	sta ($72),y
+
+	inx
+	cpx #8
+	bne plot_loop1
+
+	ldx #0
+	inc $73
+plot_loop2:
+	ldy sprtab+24,x
+        lda ($70),y
+	ldy vtab,x
+	sta ($72),y
+
+	ldy sprtab+32,x
+	lda ($70),y
+	ldy vtab,x
+	iny
+	sta ($72),y
+
+	ldy sprtab+40,x
+	lda ($70),y
+	ldy vtab,x
+	iny
+	iny
+	sta ($72),y
+
+	inx
+	cpx #8
+	bne plot_loop2
+
+	inc $72
+	inc $72    
+	inc $72    
+	dec $73
+    rts
+
+sprtab:	.byte 0,3,6,9,12,15,18,21
+		.byte 1,4,7,10,13,16,19,22
+		.byte 2,5,8,11,14,17,20,23
+
+		.byte 24,27,30,33,36,39,42,45
+		.byte 25,28,31,34,37,40,43,46
+		.byte 26,29,32,35,38,41,44,47
+
+plot_blank_xy:      ; X=y, Y=x
+
+    lda screen_rows_low
+    sta $72
+    lda screen_rows_high,x
+    sta $73
+
+    tya
+    tax
+    lda screen_columns_low,x
+    adc $72
+    sta $72
+    lda screen_columns_high
+    adc $73
+    sta $73
+    clc
+    ; run on into plot_blank
+
+plot_blank:         ; $72,$73=destination address
+
+	ldx #0
+	lda #$00
+plot_blank_loop1:
+	ldy vtab,x
+	sta ($72),y
+	iny
+	sta ($72),y
+	iny
+	sta ($72),y
+	inx
+	cpx #8
+	bne plot_blank_loop1
+
+	ldx #0
+	inc $73
+plot_blank_loop2:
+	ldy vtab,x
+	sta ($72),y
+	iny
+	sta ($72),y
+	iny
+	sta ($72),y
+	inx
+	cpx #8
+	bne plot_blank_loop2
+    
+	inc $72    
+	inc $72    
+	inc $72
+	dec $73
+    
+    rts
+
+vtab:	.byte 0,$20,$40,$60,$80,$a0,$c0,$e0
+
+plot_tile:          ; $7b=tile number
+                    ;   1 = flowers/decoration
+                    ;   2 = trees/wall
+                    ;   3 = trees
+                    ;   4 = exit
+                    ;   5 = open exit
+                    ;   6 = final exit (left)
+                    ;   7 = final exit (right)
+                    ; $72,$73=screen position 
+
+    lda $7b
+    cmp #0
+    bne plot_tile_sprite
+    clc
+    jmp plot_blank      ; optimise away the rts
+
+    plot_tile_sprite:
+    clc
+    tax
+    dex
+    lda tile_addresses_low,x
+    sta $70
+    lda tile_addresses_high,x
+    sta $71
+
+    lda $7b
+    cmp #4
+    bpl plot_not_blank_after_add_loop   ; don't adjust the tile for later levels
+    
+    clc
+    lda L578a
+    and #3              ; change the tile set for later levels
+    tax
+
+    plot_not_blank_add_loop:
+
+        cpx #2
+        bne plot_not_blank_not_2
+        dex
+        jmp plot_not_blank_not_0
+
+        plot_not_blank_not_2:
+        beq plot_not_blank_add_loop
+        cpx #0
+
+        plot_not_blank_not_0:
+        beq plot_not_blank_after_add_loop
+        clc
+        lda $70
+        adc #<(48*3)		; $20
+        sta $70
+        lda $71
+        adc #>(48*3)		; $01
+        sta $71
+        dex
+        jmp plot_not_blank_add_loop
+
+    plot_not_blank_after_add_loop:
+    clc
+    jsr plot
+    rts
+
+plot_room:          ; $78,$79 = i,j (from L5782,L5782+1)
+    lda L5782
+    sta $78
+    lda L5782+1
+    sta $79
+
+    jsr make_room
+    ; Run on into the next piece of code.
+
+plot_room_tiles:
+
+    lda #<$8301	;#$80
+    sta $72
+    lda #>$8301	;#$5a
+    sta $73         ; $72,$73 = screen position
+
+    lda #0
+    sta $7a
+    row_loop:
+
+        lda #9
+        sta $76
+
+        column_loop:
+            lda $7a
+            tax
+            lda L579c,x
+            sta $7b
+            jsr plot_tile
+
+            inc $7a
+            lda $76
+            sec
+            sbc #1
+            sta $76
+            clc
+            cmp #0
+            bpl column_loop
+
+        clc
+
+	lda #1
+        sta $72
+        lda $73
+        adc #$02
+        sta $73
+        clc
+        cmp #$97
+        beq end_rows
+
+        jmp row_loop
+    
+end_rows:
+    rts
+
+; Sprite data stored in memory: 00 04 08 0c 10 14 18 1c 20 24 28 2c
+; Atomsprites will be 8x16 instead of 8x24!!!
+
+plot8x24_y0:            ; $70,$71=source address
+                        ; $72,$73=destination address
+
+    ldy #1
+    sty v_cnt
+
+    plot8x24_y0_loop:
+
+        ldx #0
+
+        plotloop8x24_y0_0:
+		stx h_cnt
+		ldy h_cnt	
+            lda ($70),y		; Load sprite data
+		ldy spr_tab8x24,x
+            eor ($72),y
+            sta ($72),y		; Set screen data
+
+	cpx #7			; Block bottomleft
+	bne pl8x24_s1
+	inc $73
+pl8x24_s1:
+	cpx #15			; Block topright
+	bne pl8x24_s2
+	dec $73
+pl8x24_s2:
+	cpx #23			; Block bottomright
+	bne pl8x24_s3
+	inc $73
+pl8x24_s3:
+
+	inx
+	cpx #32
+	bne plotloop8x24_y0_0
+
+    plot8x24_y0_exit:
+	clc
+    jmp plot_buffer_loop_next
+
+v_cnt:	.byte 0
+h_cnt:	.byte 0
+
+spr_tab8x24:
+	.byte 0,$20,$40,$60,$80,$a0,$c0,$e0
+	.byte 0,$20,$40,$60,$80,$a0,$c0,$e0
+	.byte 1,$21,$41,$61,$81,$a1,$c1,$e1
+	.byte 1,$21,$41,$61,$81,$a1,$c1,$e1
+
+;Atomsprites will be 12x16 instead of 16x16!!!!
+
+plot16x16_y0:           ; $70,$71=source address
+                        ; $72,$73=destination address
+    ldy #1
+    sty v_cnt
+
+    plot16x16_y0_loop:
+
+        ldx #0
+
+        plotloop16x16_y0_0:
+		stx h_cnt
+		ldy h_cnt	
+            lda ($70),y		; Load sprite data
+		ldy spr_tab16x16,x
+            eor ($72),y
+            sta ($72),y		; Set screen data
+
+	cpx #7			; Block topleft
+	bne pl16x16_s1
+	inc $73
+pl16x16_s1:
+	cpx #11			; Block topright
+	bne pl16x16_s2
+	dec $73
+pl16x16_s2:
+	cpx #19			; Block bottomright
+	bne pl16x16_s3
+	inc $73
+pl16x16_s3:
+	cpx #23			; Block topright
+	bne pl16x16_s4
+	dec $73
+pl16x16_s4:
+	cpx #31			; Block topright
+	bne pl16x16_s5
+	inc $73
+pl16x16_s5:
+
+	inx
+	cpx #36
+	bne plotloop16x16_y0_0
+
+	clc
+    jmp plot_buffer_loop_next
+
+spr_tab16x16:
+	.byte 0,$20,$40,$60,$80,$a0,$c0,$e0
+	.byte 0,$20,$40,$60
+	.byte 1,$21,$41,$61,$81,$a1,$c1,$e1
+	.byte 1,$21,$41,$61
+	.byte 2,$22,$42,$62,$82,$a2,$c2,$e2
+	.byte 2,$22,$42,$62
+	
+; Sprite data stored in memory: 00 04 08 0c 10 14 18 1c 20 24 28 2c 30 34 38 3c
+
+plot8x8_y0:             ; $70,$71=source address
+                        ; $72,$73=destination address
+    ldy #1
+    sty v_cnt
+
+    plot8x8_y0_loop:
+
+        ldx #0
+
+        plotloop8x8_y0_0:
+		stx h_cnt
+		ldy h_cnt	
+            lda ($70),y		; Load sprite data
+		ldy spr_tab8x8,x
+            eor ($72),y
+            sta ($72),y		; Set screen data
+
+	cpx #7			; Block topleft
+	bne pl8x8_s1
+	inc $72
+pl8x8_s1:
+
+	inx
+	cpx #16
+	bne plotloop8x8_y0_0
+
+    clc
+
+    jmp plot_buffer_loop_next
+
+spr_tab8x8:
+	.byte 0,$20,$40,$60,$80,$a0,$c0,$e0
+	.byte 0,$20,$40,$60,$80,$a0,$c0,$e0
+
+;---------------------------
+;Key scan code, 
+; returns y=255 if key pressed
+; returns y=0 if key not pressed
+;---------------------------
+check_key	= scankey
+
+screen_rows_low:		.byte $00
+screen_rows_high:		.byte $83,$85,$87,$89,$8b,$8d,$8f,$91,$93,$95
+screen_subrows_low:		.byte $00,$80,$00,$80
+screen_subrows_high:		.byte $00,$00,$01,$01
+
+screen_columns_low:		.byte $01,$04,$07,$0a,$0d,$10,$13,$16,$19,$1c
+screen_columns_high:		.byte $00
+screen_subcolumns_low:		.byte $00,$01,$02
+screen_subcolumns_high:		.byte $00
+
+unplot_character:       ; $74,$75=character address
+
+    lda $82             ; store the unplot buffer address in $78,$79
+    sta $78
+    lda $83
+    sta $79
+    jsr plot_character_sprite
+    lda $78
+    sta $82             ; update the latest space in the unplot buffer
+    rts
+
+plot_character:         ; $74,$75=character address
+
+    lda $84             ; store the plot buffer address in $78,$79
+    sta $78
+    lda $85
+    sta $79
+    jsr plot_character_sprite
+    lda $78
+    sta $84             ; update the latest space in the plot buffer
+    rts
+
+plot_character_sprite:  ; $74,$75=character address
+                        ; $78,$79=unplot/plot buffer address
+
+    ldy #0
+    lda ($74),y
+    cmp #0
+    bne plot_characters_read_character
+    jmp plot_characters_next
+
+    plot_characters_read_character:
+    clc
+
+    sta $77         ; temporarily store the object type
+
+    ; Use lookup tables to load the offsets into the sprite.
+
+    ; Direction
+    iny
+    lda ($74),y
+    sta $80         ; temporarily store the direction
+
+    ; y
+    iny
+    lda ($74),y
+    tax
+    lda screen_rows_low		; $8300,$8500,$8700....$9500
+    sta $72
+    lda screen_rows_high,x
+    sta $73
+    clc
+
+    ; dy
+    iny
+    lda ($74),y
+    sta $76
+    tax
+    lda screen_subrows_low,x	; $00,$40,$80,$c0
+    adc $72
+    sta $72
+    lda screen_subrows_high,x
+    adc $73
+    sta $73
+    clc
+
+    ; x
+    iny
+    lda ($74),y
+    tax
+    lda screen_columns_low,x	; 1,3,5,...29
+    adc $72
+    sta $72
+    lda screen_columns_high
+    adc $73
+    sta $73
+    clc
+
+    ; dx
+    iny
+    lda ($74),y
+    tax
+    lda screen_subcolumns_low,x		;0,1,2
+    adc $72
+    sta $72
+    lda screen_subcolumns_high
+    adc $73
+    sta $73
+    clc
+
+    lda $77
+    cmp #1
+    bne plot_characters_loop_not_player
+
+    ; Plot 8x24 sprites (player)
+
+    ldx $80
+    lda player_direction_chars_low,x
+    sta $70
+    lda player_direction_chars_high,x
+    sta $71
+
+    ; Use the dy value to determine which plotting routine to use.
+
+    ldy #0
+    ldx $76
+    lda plot_routine_indices_8x24,x
+
+    sta ($78),y
+    jmp plot_characters_stored
+
+
+    plot_characters_loop_not_player:
+    cmp #2
+    bne plot_characters_loop_not_projectile
+
+    ; Plot 8x8 sprites (projectiles)
+
+    lda $80
+    and #7
+    tax
+    lda projectile_chars_low,x
+    sta $70
+    lda projectile_chars_high,x
+    sta $71
+
+    ; Use the dy value to determine which plotting routine to use.
+
+    ldy #0
+    ldx $76
+    lda plot_routine_indices_8x8,x
+
+    sta ($78),y
+    jmp plot_characters_stored
+
+
+    plot_characters_loop_not_projectile:
+    cmp #3
+    bne plot_characters_loop_not_explosion
+
+    ; Plot 16x16 sprites (emerging, explosions)
+
+    ; Select the sprites to use.
+
+    lda $80
+    and #7          ; only keep the bits required to find the correct sprite
+    clc
+    tax
+    lda emerge_explode_chars_low,x
+    sta $70
+    lda emerge_explode_chars_high,x
+    sta $71
+
+    jmp plot_characters_16x16
+
+    plot_characters_loop_not_explosion:
+    cmp #4
+    bne plot_characters_loop_not_item
+
+    ; Plot 16x16 sprites (items)
+
+    ; Select the sprites to use.
+
+    lda $80
+    and #$0f        ; only keep the bits required to find the correct sprite
+    clc
+    tax
+    lda item_chars_low,x
+    sta $70
+    lda item_chars_high,x
+    sta $71
+
+    jmp plot_characters_16x16
+
+    plot_characters_loop_not_item:
+    cmp #8
+    bmi plot_characters_loop_not_enemy
+
+    ; Plot 16x16 sprites (enemies)
+
+    ; Select the set of sprites to use.
+
+    and #$70
+    lsr
+	lsr
+    lsr
+    lsr     ; bits 4,5,6 >> 3 -> bits 1,2,3
+ 	tax
+	lda enemie_adr_lo,x
+	sta $70
+	lda enemie_adr_hi,x
+	sta $71
+
+;   clc
+ ;   sta $71 ; 0x00, 0x02, 0x04, 0x06, 0x08
+
+    lda $80
+    and #7          ; keep the animation bits
+    tax
+    lda enemy_direction_chars_low,x
+	clc
+    adc $70
+	sta $70
+    lda enemy_direction_chars_high,x
+    adc $71
+    sta $71
+
+    plot_characters_16x16:
+
+    ; Use the dy value to determine which plotting routine to use.
+
+    ldy #0
+    ldx $76
+    lda plot_routine_indices_16x16,x
+
+    sta ($78),y
+
+    plot_characters_stored:
+
+    iny
+    lda $70
+    sta ($78),y
+    iny
+    lda $71
+    sta ($78),y
+    iny
+    lda $72
+    sta ($78),y
+    iny
+    lda $73
+    sta ($78),y
+
+    clc
+    lda $78
+    adc #12
+    sta $78
+
+;	lda $79
+;	adc #0
+;	sta $79
+
+    plot_characters_loop_not_enemy:
+
+    plot_characters_next:
+
+    lda #255    ; terminate this stream of entries in the plot buffer
+    ldy #0
+    sta ($78),y
+    clc
+    rts
+
+enemie_adr_lo:	.byte <0,<288,<576,<864,<1152
+enemie_adr_hi:	.byte >0,>288,>576,>864,>1152
+
+plot_routine_indices_8x24:  .byte 1, 2, 3, 4
+plot_routine_indices_8x8:   .byte 5, 6, 7, 8
+plot_routine_indices_16x16: .byte 9, 10, 11, 12
+
+reset_plot_buffer:
+    lda #<(L5300+6)    ; $5306 reset the index into the plot buffer
+    sta $84
+    lda #>(L5300+6)
+    sta $85
+
+    lda #255    ; terminate the plot list
+    ldy #0
+    sta ($84),y
+    rts
+
+reset_unplot_buffer:
+    lda #<L5300    ; $5300 reset the index into the plot buffer
+    sta $82
+    lda #>L5300
+    sta $83
+
+    lda #255    ; terminate the unplot list
+    ldy #0
+    sta ($82),y
+    rts
+
+plot_buffer_types_low:  .byte <plot_buffer_loop_next
+plot_buffer_types_low1: .byte <plot8x24_y0, <plot8x24_y0, <plot8x24_y0, <plot8x24_y0
+plot_buffer_types_low2: .byte <plot8x8_y0, <plot8x8_y0, <plot8x8_y0, <plot8x8_y0
+plot_buffer_types_low3: .byte <plot16x16_y0, <plot16x16_y0, <plot16x16_y0, <plot16x16_y0
+
+plot_buffer_types_high:  .byte >plot_buffer_loop_next
+plot_buffer_types_high1: .byte >plot8x24_y0, >plot8x24_y0, >plot8x24_y0, >plot8x24_y0
+plot_buffer_types_high2: .byte >plot8x8_y0, >plot8x8_y0, >plot8x8_y0, >plot8x8_y0
+plot_buffer_types_high3: .byte >plot16x16_y0, >plot16x16_y0, >plot16x16_y0, >plot16x16_y0
+
+plot_buffer:
+
+    lda #<L5300			; $5300
+    sta $84
+    lda #>L5300
+    sta $85
+
+    lda #6
+    sta $88
+
+    plot_buffer_loop:
+
+        ldy #0
+        lda ($84),y
+        cmp #255
+        beq plot_buffer_loop_skip
+
+        clc
+        tax
+        lda plot_buffer_types_low,x
+        sta $86
+        lda plot_buffer_types_high,x
+        sta $87
+
+        iny
+        lda ($84),y
+        sta $70
+
+        iny
+        lda ($84),y
+        sta $71
+
+        iny
+        lda ($84),y
+        sta $72
+
+        iny
+        lda ($84),y
+        sta $73
+
+        jmp ($86)       ; returns to plot_buffer_loop_next
+
+        plot_buffer_loop_skip:
+
+        lda $88
+        cmp #12
+        beq plot_buffer_exit    ; both unplot and plot lists have terminated
+
+        lda #12
+        sta $88
+        lda $84
+        adc #6
+        sta $84
+        jmp plot_buffer_loop
+
+        plot_buffer_loop_next:
+        clc
+
+        lda $84
+        adc $88
+        sta $84
+        jmp plot_buffer_loop
+
+    plot_buffer_exit:
+    clc
+    rts
+
+room_row_offsets_low:
+		.byte <(L579c+00),<(L579c+10)
+		.byte <(L579c+20),<(L579c+30)
+		.byte <(L579c+40),<(L579c+50)
+		.byte <(L579c+60),<(L579c+70)
+		.byte <(L579c+80),<(L579c+90)
+room_row_offsets_high:
+		.byte >(L579c+00),>(L579c+10)
+		.byte >(L579c+20),>(L579c+30)
+		.byte >(L579c+40),>(L579c+50)
+		.byte >(L579c+60),>(L579c+70)
+		.byte >(L579c+80),>(L579c+90)
+
+animate_player_left:
+
+    ; Set the direction and toggle the animation bit.
+
+    lda L5280+$1
+    and #1
+    eor #1      ; toggle animation flag
+    sta L5280+$1   ; left (directional bits are 0)
+
+    jsr plot_character
+    rts
+
+animate_player_right:
+
+    ; Set the direction and toggle the animation bit.
+
+    lda L5280+$1
+    and #1      ; remove direction information (result is 0)
+    eor #1      ; toggle animation flag
+    ora #2      ; right
+    sta L5280+$1
+
+    jsr plot_character
+    rts
+
+animate_player_up:
+
+    ; Set the direction and toggle the animation bit.
+
+    lda L5280+$1
+    and #1      ; remove direction information (result is 0)
+    eor #1      ; toggle animation flag
+    ora #4      ; up
+    sta L5280+$1
+
+    jsr plot_character
+    rts
+
+animate_player_down:
+
+    ; Set the direction and toggle the animation bit.
+
+    lda L5280+$1
+    and #1      ; remove direction information (result is 0)
+    eor #1      ; toggle animation flag
+    ora #6      ; down
+    sta L5280+$1
+
+    jsr plot_character
+    rts
+
+;joystick_abs:
+;
+;    cmp #160
+;    bcc joystick_abs_next1
+;
+;    sec
+;    sbc #128
+;    clc
+;    rts
+;
+;    joystick_abs_next1:
+;
+;    cmp #97
+;    bcs joystick_abs_next2
+;
+;    sta $81
+;    lda #128
+;    sec
+;    sbc $81
+;    clc
+;    rts
+;
+;    joystick_abs_next2:
+;    lda #0
+;    clc
+;    rts
+;
+read_joystick:
+
+	jsr joyget
+	sta $8f
+
+	and #1			; Test right
+	beq chk_joy_left
+	jmp move_player_right
+chk_joy_left:
+	lda $8f
+	and #2			; Test left
+	beq chk_joy_down
+	jmp move_player_left
+
+read_joystick_vertical_check:
+
+chk_joy_down:
+	lda $8f
+	and #4			; Test down
+	beq chk_joy_up
+	jmp move_player_down
+chk_joy_up:
+	lda $8f
+	and #8			; Test up
+	beq no_joy_move
+	jmp move_player_up
+no_joy_move:
+	clc
+	rts
+
+;    lda #128
+;    ldx #2
+;    jsr $fff4
+;    tya
+;    sta $8e             ; store the original vertical value
+;
+;    jsr joystick_abs
+;    sta $8f             ; absolute vertical value
+;
+;    lda #128
+;    ldx #1
+;    jsr $fff4
+;    tya
+;    sta $8d             ; store the original horizontal value
+;
+;    jsr joystick_abs
+;    cmp #0
+;    beq read_joystick_vertical_check
+;    cmp $8f
+;    bcc read_joystick_vertical_check
+;
+;    lda $8d
+;    cmp #128
+;    bcs read_joystick_left
+;    jmp move_player_right
+;
+;    read_joystick_left:
+;    jmp move_player_left
+;
+;    read_joystick_vertical_check:
+;
+;    lda $8f
+;    cmp #0
+;    bne read_joystick_vertical
+;    clc
+;    rts
+;
+;    read_joystick_vertical:
+;
+;    lda $8e
+;    cmp #128
+;    bcs read_joystick_up
+;    jmp move_player_down
+;
+;    read_joystick_up:
+;    jmp move_player_up
+
+move_player:
+
+    lda L578e
+    and #1
+    beq move_player_allowed
+
+    clc
+    rts
+
+    move_player_allowed:
+
+    lda #<L5280		; $5280 set up the address of the player character
+    sta $74
+    lda #>L5280
+    sta $75
+
+    ; Handle joystick
+
+    lda L577e
+    cmp #0
+    beq move_player_handle_left_key
+    jmp read_joystick
+
+    move_player_handle_left_key:
+
+    ; Handle the left key.
+
+    ldx #$3a            ; (Z)
+    jsr check_key
+    cpy #255
+    beq move_player_left
+    jmp move_player_check_right_key
+
+    move_player_left:
+
+    lda L5280+$5           ; read dx
+    cmp #0
+    beq move_player_left_check_x
+
+    jsr unplot_character        ; unplot the player character
+    dec L5280+$5
+    clc
+    jmp animate_player_left ; optimise away the rts
+    
+    move_player_left_check_x:   ; Check the x offset.
+
+    lda L5280+$4
+    cmp #0
+    beq move_player_leave_room_left
+
+    clc
+    tay
+    dey                         ; x - 1
+    lda L5280+$2                   ; load the y offset
+    tax                         ; as an index
+    lda room_row_offsets_low,x  ; read the address of the row
+    sta $70
+    lda room_row_offsets_high,x
+    sta $71
+    lda ($70),y                 ; load the tile to the left
+
+    cmp #5                      ; check for the open exit or final exit
+    bmi move_player_not_left_exit1
+    jmp try_to_exit_level       ; optimise away the rts
+
+    move_player_not_left_exit1:
+    cmp #0
+    beq move_player_left_check_dy
+    jmp move_player_not_horizontal
+
+    move_player_left_check_dy:
+
+    lda L5280+$3               ; dy
+    cmp #0
+    beq move_player_allow_left
+
+    clc
+    lda $70                 ; dy > 0 so we need to check another tile
+    adc #10
+    sta $70
+    lda ($70),y             ; load the tile below and to the left
+
+    cmp #5                      ; check for the open exit or final exit
+    bmi move_player_not_left_exit2
+    jmp try_to_exit_level       ; optimise away the rts
+
+    move_player_not_left_exit2:
+    cmp #0
+    beq move_player_allow_left
+    jmp move_player_not_horizontal
+
+    move_player_allow_left:
+    tya
+    sta $81                 ; temporary
+    jsr unplot_character    ; unplot the player character
+    lda $81
+    sta L5280+$4               ; store the new room x offset
+    lda #2
+    sta L5280+$5               ; dx = 3
+    clc
+    jmp animate_player_left ; optimise away the rts
+
+    move_player_leave_room_left:
+    sec
+    lda L5782+1
+    sbc #1
+    sta L5782+1
+    clc
+
+    ; Set the player's position on the right of the screen.
+    
+    ; No need to unplot.
+
+    lda #9      ; x = 9
+    sta L5280+$4
+    lda #1      ; dx = 2
+    sta L5280+$5
+
+    jsr animate_player_left
+    sec                     ; indicate to the calling routine that the player
+    rts                     ; has left the room
+
+    move_player_check_right_key:
+
+    ; Handle the right key.
+
+    ldx #$38            ; (X)
+    jsr check_key
+    cpy #255
+    beq move_player_right
+    jmp move_player_not_horizontal
+
+    move_player_right:
+
+    lda L5280+$5                   ; read dx
+    cmp #1				; cmp #2!!!!!!!!!!!!!!!!!!
+    beq move_player_right_check_x
+    cmp #2				; cmp #3!!!!!!!!!!!!!!!!!!
+    beq move_player_right_tile
+
+    jsr unplot_character        ; unplot the player character
+    inc L5280+$5
+    clc
+    jmp animate_player_right    ; optimise away the rts
+    
+    move_player_right_check_x:  ; Check the x offset.
+
+    lda L5280+$4
+    cmp #9
+    beq move_player_leave_room_right
+
+    clc
+    tay
+    iny                         ; x + 1
+    lda L5280+$2                   ; load the y offset
+    tax                         ; as an index
+    lda room_row_offsets_low,x  ; read the address of the row
+    sta $70
+    lda room_row_offsets_high,x
+    sta $71
+    lda ($70),y                 ; load the tile to the right
+
+    cmp #5                      ; check for the open exit or final exit
+    bmi move_player_not_right_exit1
+    jmp try_to_exit_level       ; optimise away the rts
+
+    move_player_not_right_exit1:
+    cmp #0
+    bne move_player_not_horizontal
+
+    lda L5280+$3                   ; dy
+    cmp #0
+    beq move_player_allow_right
+
+    clc                         ; dy > 0 so we need to check another tile
+    lda $70
+    adc #10
+    sta $70
+    lda ($70),y                 ; load the tile below and to the right
+
+    cmp #5                      ; check for the open exit or final exit
+    bmi move_player_not_right_exit2
+    jmp try_to_exit_level       ; optimise away the rts
+
+    move_player_not_right_exit2:
+    cmp #0
+    bne move_player_not_horizontal
+
+    move_player_allow_right:
+
+    jsr unplot_character        ; unplot the player character
+    inc L5280+$5                   ; update dx
+    clc
+    jmp animate_player_right    ; optimise away the rts
+
+    move_player_right_tile:
+
+    jsr unplot_character    ; unplot the player character
+    inc L5280+$4               ; store the new room x offset
+    lda #0
+    sta L5280+$5               ; dx = 0
+    clc
+    jmp animate_player_right ; optimise away the rts
+
+    move_player_leave_room_right:
+    clc
+    inc L5782+1
+    clc
+
+    ; Set the player's position on the left of the screen.
+
+    ; No need to unplot.
+
+    lda #0      ; x = 0
+    sta L5280+$4
+    lda #0      ; dx = 0
+    sta L5280+$5
+
+    jsr animate_player_right    
+    sec                         ; indicate to the calling routine that the
+    rts                         ; player has left the room
+
+    move_player_not_horizontal:
+    lda L577e
+    cmp #0
+    beq move_player_handle_up_key
+    jmp read_joystick_vertical_check
+
+    move_player_handle_up_key:
+
+    ; Handle the up key.
+
+    ldx #$1b          ; (:)
+    jsr check_key
+    cpy #255
+    beq move_player_up
+
+    ; Handle the down key.
+
+    ldx #$1e            ; (/)
+    jsr check_key
+    cpy #255
+    beq move_player_down
+    jmp move_player_not_vertical
+
+    move_player_up:
+
+    lda L5280+$3           ; read dy
+    cmp #0
+    beq move_player_up_check_y
+
+    jsr unplot_character        ; unplot the player character
+    dec L5280+$3
+    clc
+    jmp animate_player_up       ; optimise away the rts
+    
+    move_player_up_check_y:     ; Check the y offset.
+
+    lda L5280+$2
+    cmp #0
+    beq move_player_leave_room_up
+
+    tax                         ; use the y offset as an index
+    dex                         ; y - 1
+    ldy L5280+$4                   ; load the x offset
+    lda room_row_offsets_low,x  ; read the address of the row
+    sta $70
+    lda room_row_offsets_high,x
+    sta $71
+    lda ($70),y                 ; load the tile above
+
+    cmp #5                      ; check for the open exit or final exit
+    bmi move_player_not_up_exit1
+    jmp try_to_exit_level       ; optimise away the rts
+
+    move_player_not_up_exit1:
+    cmp #0
+    beq move_player_up_check_dx
+    clc
+    rts
+
+    move_player_up_check_dx:
+
+    lda L5280+$5                   ; dx
+    cmp #2					; cmp #3!!!!!!!!!!!!!!!!!!!!
+    bmi move_player_allow_up
+
+    clc                     ; dx > 2 so we need to check another tile
+    iny
+    lda ($70),y             ; load the tile above and to the right
+
+    cmp #5                      ; check for the open exit or final exit
+    bmi move_player_not_up_exit2
+    jmp try_to_exit_level       ; optimise away the rts
+
+    move_player_not_up_exit2:
+    cmp #0
+    beq move_player_allow_up
+    clc
+    rts
+
+    move_player_allow_up:
+    txa
+    sta $81                 ; temporary
+    jsr unplot_character    ; unplot the player character
+    lda $81
+    sta L5280+$2               ; store the new room y offset
+    lda #3
+    sta L5280+$3               ; dy = 3
+    clc
+    jmp animate_player_up   ; optimise away the rts
+
+    move_player_leave_room_up:
+    sec
+    lda L5782
+    sbc #1
+    sta L5782
+    clc
+
+    ; Set the player's position on the bottom of the screen.
+
+    ; No need to unplot.
+
+    lda #9      ; y = 9
+    sta L5280+$2
+    lda #0      ; dy = 0
+    sta L5280+$3
+
+    jsr animate_player_up
+    sec                     ; indicate to the calling routine that the player
+    rts                     ; has left the room
+
+    move_player_down:
+
+    lda L5280+$3                   ; read dy
+    cmp #0
+    beq move_player_down_check_y
+    cmp #3
+    beq move_player_down_tile
+
+    jsr unplot_character        ; unplot the player character
+    inc L5280+$3                   ; 0 <= dy < 3
+    clc
+    jmp animate_player_down    ; optimise away the rts
+    
+    move_player_down_check_y:  ; Check the y offset.
+
+    lda L5280+$2
+    cmp #9
+    beq move_player_leave_room_down
+
+    clc
+    tax
+    inx                         ; y + 1
+    ldy L5280+$4                   ; load the x offset
+    lda room_row_offsets_low,x  ; read the address of the row
+    sta $70
+    lda room_row_offsets_high,x
+    sta $71
+    lda ($70),y                 ; load the tile below
+
+    cmp #5                      ; check for the open exit or final exit
+    bmi move_player_not_down_exit1
+    jmp try_to_exit_level       ; optimise away the rts
+
+    move_player_not_down_exit1:
+    cmp #0
+    bne move_player_not_vertical
+
+    lda L5280+$5                   ; dx
+    cmp #2					; cmp #3!!!!!!!!!!!!!
+    bmi move_player_allow_down
+
+    clc                         ; dx > 2 so we need to check another tile
+    iny
+    lda ($70),y                 ; load the tile below and to the right
+
+    cmp #5                      ; check for the open exit or final exit
+    bmi move_player_not_down_exit2
+    jmp try_to_exit_level       ; optimise away the rts
+
+    move_player_not_down_exit2:
+    cmp #0
+    bne move_player_not_vertical
+
+    move_player_allow_down:
+
+    jsr unplot_character        ; unplot the player character
+    inc L5280+$3                   ; update dy
+    clc
+    jmp animate_player_down     ; optimise away the rts
+
+    move_player_down_tile:
+
+    jsr unplot_character        ; unplot the player character
+    inc L5280+$2                   ; store the new room y offset
+    lda #0
+    sta L5280+$3                   ; dy = 0
+    clc
+    jmp animate_player_down     ; optimise away the rts
+
+    move_player_leave_room_down:
+    inc L5782
+    clc
+
+    ; Set the player's position on the top of the screen.
+
+    ; No need to unplot.
+
+    lda #0      ; y = 0
+    sta L5280+$2
+    lda #0      ; dy = 0
+    sta L5280+$3
+
+    jsr animate_player_down
+    sec                         ; indicate to the calling routine that the
+    rts                         ; player has left the room
+
+    move_player_not_vertical:
+    clc
+    rts
+
+try_to_exit_level:
+
+    cmp #6
+    bmi just_exit_level
+
+    lda L5780                   ; set the complete game flag
+    ora #$02
+    jmp try_to_exit_level_exit
+
+    just_exit_level:
+    lda L5780                   ; set the exit level flag
+    ora #$80
+
+    try_to_exit_level_exit:
+    sta L5780
+
+    lda #<L5280			; $5280
+    sta $74
+    lda #>L5280
+    sta $75
+    jsr unplot_character    ; remove the player sprite
+    jmp destroy_enemies     ; optimise away the rts
+
+check_fire_key:
+
+    lda L578d
+    bne check_fire_key_exit
+
+    lda L577e
+    beq check_fire_key_no_joystick
+
+	jsr joyget
+	and #$10
+;    lda #128
+;    ldx #0
+;    jsr $fff4
+;    txa
+;    and #1
+    bne check_fire_key_fire
+
+    clc
+    rts
+
+    check_fire_key_no_joystick:
+
+    ldx #13            ; (Return)
+    jsr check_key
+    cpy #255
+    bne check_fire_key_exit
+
+    check_fire_key_fire:
+
+    lda L5280+$6
+    cmp #0
+    bne check_fire_key_exit
+
+    lda #16
+    sta L578d
+
+    jmp create_projectile   ; optimise away the rts
+
+    check_fire_key_exit:
+    clc
+    rts
+
+create_projectile:
+
+    lda #2
+    sta L5280+$6
+
+    lda L5280+$1
+    and #$06        ; copy the direction information
+    asl
+    asl
+    asl
+    ora L5789       ; apply the projectile type
+    sta L5280+$7
+
+    lda L5280+$3       ; player dy
+    adc L577f       ; add the weapon counter
+    adc #1
+    cmp #4          ; if dy > 3, create the projectile on the tile below
+    bpl create_projectile_below
+
+    clc
+    sta L5280+$9       ; dy + weapon counter + 1
+    lda L5280+$2       ; y
+    sta L5280+$8
+    jmp create_projectile_continue
+
+    create_projectile_below:
+    sec
+    sbc #4
+    sta L5280+$9       ; dy + weapon counter + 1 - 4
+    clc
+    lda L5280+$2       ; y
+    adc #1
+    sta L5280+$8
+
+    create_projectile_continue:
+    lda L5280+$4       ; x
+    sta L5280+$a
+
+    lda L5280+$5       ; dx
+    sta L5280+$b
+
+    lda L577f       ; toggle the weapon counter
+    eor #1
+    sta L577f
+
+    ; Move the projectile away from the player.
+
+    lda #<(L5280+6)		; $5286
+    sta $74
+    lda #>(L5280+6)
+    sta $75
+    jsr move_projectile_after_unplot
+
+    jsr move_projectile
+
+    clc
+    rts
+
+emerge_type:                    ; returns A=type
+    jsr unlimited_values
+    lda $7d
+    and #7
+    cmp #5
+    bmi emerge_type_ok
+
+    sec
+    sbc #5
+    clc
+
+    emerge_type_ok:
+    cmp L5781               ; only allow the appropriate enemies for this level
+    bmi emerge_type_exit
+    beq emerge_type_reduce
+
+    sec
+    sbc #1
+
+    emerge_type_reduce:
+    sec
+    sbc L5781
+    clc
+
+    emerge_type_exit:
+    asl
+    asl
+    asl
+    asl
+    clc
+    rts
+
+emerge_character:           ; $74,$75=character address
+
+    lda #63
+    sta L578f
+
+    jsr unlimited_values
+    and #$0f
+    tax
+    lda L0ee0,x
+    cmp #0                  ; check for an invalid value and exit if found
+    beq emerge_character_exit
+
+    sta $80                 ; temporary
+    lda L0ef0,x
+    tax
+
+    ; Add an emerging enemy.
+
+    ldy #0
+    lda #3                  ; emerge/explosion
+    sta ($74),y
+
+    jsr emerge_type         ; obtain an enemy type
+    iny
+    sta ($74),y
+
+    txa
+    iny
+    sta ($74),y             ; store the y position
+    lda #1
+    iny
+    sta ($74),y             ; store the dy offset
+
+    lda $80
+    iny
+    sta ($74),y             ; store the x position
+    lda #0
+    iny
+    sta ($74),y             ; store the dx offset
+
+    jsr plot_character
+
+    ldx #5
+    jsr play_sound
+
+    emerge_character_exit:
+    clc
+    rts
+
+emerge_explode:             ; $74,$75=character address
+
+    jsr unplot_character
+
+    ldy #1
+    lda ($74),y     ; direction/animation
+    tax
+    adc #1          ; update the counter
+    and #3          ; mask off everything else
+    sta $80         ; store the masked counter value
+    bne move_characters_explosion_not_finished
+
+    txa
+    and #4
+    bne move_characters_remove_character
+
+    ; For emerges, convert into an enemy.
+    txa
+    and #$70        ; only keep bits 4,5,6
+    ora #8          ; make this an enemy
+
+    ldy #0
+    sta ($74),y     ; update the type (>= 8)
+    iny
+    lda $7d         ; prepare the direction and animation offset
+    and #$0c
+    sta ($74),y
+
+    jsr plot_character
+    jmp emerge_explode_exit
+
+    move_characters_remove_character:
+
+    ; For finished explosions, just write 0 into the character array.
+    lda #0
+    ldy #0
+    sta ($74),y
+    jmp emerge_explode_exit
+
+    move_characters_explosion_not_finished:
+    txa
+    and #$fc
+    ora $80
+
+    ldy #1
+    sta ($74),y
+
+    jsr plot_character
+
+    emerge_explode_exit:
+    clc
+    rts
+
+animate_enemy_left:     ; $74,$75=character address
+
+    ; Set the direction and toggle the animation bit.
+
+    ldy #1
+    lda ($74),y
+    and #$fb    ; keep vertical direction bit and animation bits
+    sta ($74),y ; left (horizontal directional bit is 0)
+
+    rts
+
+move_enemy_left:        ; $74,$75=character address
+
+    ldy #5
+    lda ($74),y         ; read dx
+    cmp #0
+    beq move_enemy_left_check_x
+
+    sec
+    sbc #1
+    ldy #5
+    sta ($74),y                 ; dx
+    clc
+    jmp animate_enemy_left      ; optimise away the rts
+
+    move_enemy_left_check_x:
+
+    ; Check the x offset.
+
+    ldy #4
+    lda ($74),y                 ; x
+    cmp #0
+    beq move_enemy_left_exit
+
+    sec
+    sbc #1                      ; x - 1
+    sta $81                     ; temporary
+    ldy #2
+    lda ($74),y                 ; load the y offset
+    tax                         ; as an index
+    lda room_row_offsets_low,x  ; read the address of the row
+    sta $70
+    lda room_row_offsets_high,x
+    sta $71
+    ldy $81                     ; temporary (x - 1)
+    lda ($70),y                 ; load the tile to the left
+
+    cmp #0
+    bne move_enemy_left_exit
+
+    ldy #3
+    lda ($74),y                 ; dy
+    cmp #1				; cmp #2
+    bmi move_enemy_allow_left
+
+    clc
+    lda $70                 ; dy > 1 so we need to check another tile
+    adc #10
+    sta $70
+    ldy $81                 ; temporary (x - 1)
+    lda ($70),y             ; load the tile below and to the left
+
+    cmp #0
+    bne move_enemy_left_exit
+
+    move_enemy_allow_left:
+    lda $81
+    ldy #4
+    sta ($74),y             ; store the new room x offset
+    lda #2				; dx=3
+    ldy #5
+    sta ($74),y             ; dx = 3
+    clc
+    jmp animate_enemy_left ; optimise away the rts
+
+    move_enemy_left_exit:
+    sec
+    rts
+
+animate_enemy_right:    ; $74,$75=character address
+
+    ; Set the direction and toggle the animation bit.
+
+    ldy #1
+    lda ($74),y
+    ora #$04    ; right (keep vertical direction bit and animation bits)
+    sta ($74),y
+
+    rts
+
+move_enemy_right:       ; $74,$75=character_address
+
+    ldy #5
+    lda ($74),y                 ; read dx
+    cmp #0
+    beq move_enemy_right_check_x
+    cmp #2				; cmp #3
+    beq move_enemy_right_tile
+
+    clc
+    adc #1
+    ldy #5
+    sta ($74),y
+    jmp animate_enemy_right    ; optimise away the rts
+    
+    move_enemy_right_check_x:  ; Check the x offset.
+
+    ldy #4
+    lda ($74),y                 ; x
+    cmp #9
+    beq move_enemy_right_exit
+
+    clc
+    adc #1                      ; x + 1
+    sta $81                     ; temporary (x + 1)
+    ldy #2
+    lda ($74),y                 ; load the y offset
+    tax                         ; as an index
+    lda room_row_offsets_low,x  ; read the address of the row
+    sta $70
+    lda room_row_offsets_high,x
+    sta $71
+    ldy $81                     ; temporary (x + 1)
+    lda ($70),y                 ; load the tile to the right
+
+    cmp #0
+    bne move_enemy_right_exit
+
+    ldy #3
+    lda ($74),y                 ; dy
+    cmp #2
+    bmi move_enemy_allow_right
+
+    clc                         ; dy > 1 so we need to check another tile
+    lda $70
+    adc #10
+    sta $70
+    ldy $81                     ; temporary (x + 1)
+    lda ($70),y                 ; load the tile below and to the right
+
+    cmp #0
+    bne move_enemy_right_exit
+
+    move_enemy_allow_right:
+    clc
+
+    ldy #5
+    lda ($74),y                 ; dx
+    adc #1
+    sta ($74),y                 ; update dx
+    clc
+    jmp animate_enemy_right    ; optimise away the rts
+
+    move_enemy_right_tile:
+    clc
+
+    ldy #4
+    lda ($74),y             ; x
+    adc #1
+    sta ($74),y             ; store the new room x offset
+    lda #0
+    iny
+    sta ($74),y             ; dx = 0
+    clc
+    jmp animate_enemy_right ; optimise away the rts
+
+    move_enemy_right_exit:
+    sec
+    rts
+
+animate_enemy_up:   ; $74,$75=character address
+
+    ; Set the direction and toggle the animation bit.
+
+    ldy #1
+    lda ($74),y
+    and #$f7    ; keep horizontal direction bit and animation bits
+    sta ($74),y
+
+    rts
+
+move_enemy_up:      ; $74,$75=character address
+
+    ldy #3
+    lda ($74),y                 ; read dy
+    cmp #0
+    beq move_enemy_up_check_y
+
+    sec
+    sbc #1
+    ldy #3
+    sta ($74),y                 ; dy
+    clc
+    jmp animate_enemy_up        ; optimise away the rts
+    
+    move_enemy_up_check_y:
+
+    ; Check the y offset.
+
+    ldy #2
+    lda ($74),y                 ; y
+    cmp #0
+    beq move_enemy_up_exit
+
+    tax                         ; use the y offset as an index
+    dex                         ; y - 1
+    ldy #4
+    lda ($74),y                 ; load the x offset
+    sta $81                     ; temporary (x)
+    tay
+    lda room_row_offsets_low,x  ; read the address of the row
+    sta $70
+    lda room_row_offsets_high,x
+    sta $71
+    lda ($70),y                 ; load the tile above
+
+    cmp #0
+    bne move_enemy_up_exit
+
+    ldy #5
+    lda ($74),y                 ; dx
+    cmp #0
+    beq move_enemy_allow_up
+
+    clc                     ; dx != 0 so we need to check another tile
+    ldy $81
+    iny
+    lda ($70),y             ; load the tile above and to the right
+
+    cmp #0
+    bne move_enemy_up_exit
+
+    move_enemy_allow_up:
+    txa
+    ldy #2
+    sta ($74),y             ; store the new room y offset
+    lda #3
+    iny
+    sta ($74),y             ; dy = 3
+    clc
+    jmp animate_enemy_up   ; optimise away the rts
+
+    move_enemy_up_exit:
+    sec
+    rts
+
+animate_enemy_down: ; $74,$75=character address
+
+    ; Set the direction and toggle the animation bit.
+
+    ldy #1
+    lda ($74),y
+    ora #$08    ; down
+    sta ($74),y
+
+    rts
+
+move_enemy_down:    ; $74,$75=character address    
+
+    ldy #3
+    lda ($74),y         ; dy
+    cmp #1
+    beq move_enemy_down_check_y
+    cmp #3
+    beq move_enemy_down_tile
+
+    adc #1
+    ldy #3
+    sta ($74),y         ; dy
+    clc
+    jmp animate_enemy_down      ; optimise away the rts
+    
+    move_enemy_down_check_y:
+
+    ; Check the y offset.
+
+    ldy #2
+    lda ($74),y
+    cmp #9
+    beq move_enemy_down_exit
+
+    clc
+    adc #1                      ; y + 1
+    tax
+    ldy #4
+    lda ($74),y                 ; load the x offset
+    sta $81                     ; temporary
+    tay
+    lda room_row_offsets_low,x  ; read the address of the row
+    sta $70
+    lda room_row_offsets_high,x
+    sta $71
+    lda ($70),y                 ; load the tile below
+
+    cmp #0
+    bne move_enemy_down_exit
+
+    ldy #5
+    lda ($74),y                 ; dx
+    cmp #0
+    beq move_enemy_allow_down
+
+    clc                         ; dx != 0 so we need to check another tile
+    ldy $81                     ; x
+    iny
+    lda ($70),y                 ; load the tile below and to the right
+
+    cmp #0
+    bne move_enemy_down_exit
+
+    move_enemy_allow_down:
+    clc
+
+    ldy #3
+    lda ($74),y                 ; dy
+    adc #1
+    sta ($74),y                 ; update dy
+    clc
+    jmp animate_enemy_down      ; optimise away the rts
+
+    move_enemy_down_tile:
+    clc
+
+    ldy #2
+    lda ($74),y                 ; y
+    adc #1
+    sta ($74),y                 ; store the new room y offset
+    lda #0
+    iny
+    sta ($74),y                 ; dy = 0
+    clc
+    jmp animate_enemy_down      ; optimise away the rts
+
+    move_enemy_down_exit:
+    sec
+    rts
+
+move_enemy_animate:     ; $74,$75=character address
+
+    ldy #1
+    lda ($74),y         ; direction/animation
+    sta $81
+    and #$03
+    adc #1
+    and #$03            ; keep animation bits
+    sta $8f
+    lda $81
+    and #$fc            ; mask off the animation bits
+    ora $8f
+    sta ($74),y
+    rts
+
+move_enemy_next_direction: .byte $04, $0c, $00, $08
+
+move_enemy:             ; $74,$75=character address
+
+    lda #0
+    sta $8d             ; vertical motion value (0=no motion; 1=up; 2=down)
+    lda #0
+    sta $8e             ; horizontal motion value (0=no motion; 1=left; 2=right)
+
+    lda ($74),y         ; read the enemy number (Y should be zero)
+    and #$10
+    beq move_enemy_homing
+    clc
+
+    ; This enemy is a non-homing enemy.
+
+    jsr unplot_character    ; unplot now before we change the sprite used
+
+    ldy #1
+    lda ($74),y
+    and #$f0
+    cmp #$f0
+    bne move_enemy_set_direction
+    clc
+
+    ldy #1
+    lda ($74),y
+    and #$0c
+    ror
+    ror
+    tax
+    lda move_enemy_next_direction,x
+    sta ($74),y
+
+    move_enemy_set_direction:
+    clc
+
+    ldy #1
+    lda ($74),y
+    sta $7b
+
+    adc #$10
+    sta ($74),y
+    clc
+
+    lda $7b
+    and #$04
+    ror
+    ror
+    adc #1
+    sta $8e
+
+    lda $7b
+    and #$08
+    ror
+    ror
+    ror
+    adc #1
+    sta $8d
+
+    jmp move_enemy_with_direction
+
+    move_enemy_homing:
+
+    ldy #2
+    lda ($74),y         ; y
+    cmp L5280+$2           ; player y
+    bmi move_enemy_downwards
+    bne move_enemy_upwards
+
+    ldy #3
+    lda ($74),y         ; dy
+    cmp L5280+$3           ; player y
+    beq move_enemy_horizontally
+    bpl move_enemy_upwards
+
+    move_enemy_downwards:
+    lda #2
+    sta $8d
+    jmp move_enemy_horizontally
+
+    move_enemy_upwards:
+    lda #1
+    sta $8d
+    ;jmp move_enemy_horizontally
+
+    move_enemy_horizontally:
+    ldy #4
+    lda ($74),y         ; x
+    cmp L5280+$4           ; player x
+    bmi move_enemy_rightwards
+    bne move_enemy_leftwards
+
+    ldy #5
+    lda ($74),y         ; dx
+    cmp #0
+    beq move_enemy_with_direction_unplot
+    bpl move_enemy_leftwards
+
+    move_enemy_rightwards:
+    lda #2
+    sta $8e
+    jmp move_enemy_with_direction_unplot
+
+    move_enemy_leftwards:
+    lda #1
+    sta $8e
+
+    move_enemy_with_direction_unplot:
+    clc
+
+    jsr unplot_character
+
+    move_enemy_with_direction:
+    clc
+
+    lda $8e
+    cmp #1
+    bne move_enemy_not_left
+    jsr move_enemy_left
+    clc
+    jmp move_enemy_not_right
+
+    move_enemy_not_left:
+    lda $8e
+    cmp #2
+    bne move_enemy_not_right
+    jsr move_enemy_right
+    clc
+
+    move_enemy_not_right:
+    lda $8d
+    cmp #1
+    bne move_enemy_not_up
+    jsr move_enemy_up
+    clc
+    jmp move_enemy_toggle
+
+    move_enemy_not_up:
+    lda $8d
+    cmp #2
+    bne move_enemy_toggle
+    jsr move_enemy_down
+
+    move_enemy_toggle:
+    clc
+    jsr move_enemy_animate
+    jmp plot_character      ; optimise away the rts
+
+    move_enemy_exit:
+    clc
+    rts
+
+create_explosion:           ; X=y, Y=x
+
+    lda #3
+    sta L5280+$24
+    lda #4
+    sta L5280+$25
+    txa
+    sta L5280+$26
+    lda #1
+    sta L5280+$27
+    tya
+    sta L5280+$28
+    lda #0
+    sta L5280+$29
+    rts
+
+move_projectile_left:
+
+    lda L5280+$b
+    cmp #0
+    beq move_projectile_left_check_x
+
+    dec L5280+$b
+    clc
+    rts
+
+    move_projectile_left_check_x:
+
+    lda L5280+$a
+    cmp #0
+    bne move_projectile_left_in_room
+    jmp move_projectile_left_exit
+
+    move_projectile_left_in_room:
+    tay
+    dey                         ; x - 1
+    ldx L5280+$8                   ; y
+    lda room_row_offsets_low,x  ; read the address of the row
+    sta $70
+    lda room_row_offsets_high,x
+    sta $71
+    lda ($70),y                 ; load the tile to the left
+
+    cmp #0
+    bne move_projectile_left_wall
+
+    lda L5280+$9                   ; dy
+    cmp #3
+    bmi move_projectile_allow_left
+
+    clc                         ; dy > 2 so we need to check another tile
+    lda $70
+    adc #10
+    sta $70
+    lda ($70),y                 ; load the tile below and to the left
+    inx                         ; y += 1
+
+    cmp #0
+    bne move_projectile_left_wall
+
+    move_projectile_allow_left:
+
+    sty L5280+$a       ; x
+    lda #2			;lda #3
+    sta L5280+$b       ; dx = 3
+
+    clc
+    rts
+
+    move_projectile_left_wall:  ; the projectile hit a wall
+    clc
+
+    lda L5280+$7                   ; type 2 can pass through walls
+    and #$06
+    cmp #4
+    beq move_projectile_allow_left
+
+    cmp #2
+    bne move_projectile_left_not_boomerang
+
+    lda L5280+$7
+    and #$0f
+    cmp #8
+    bpl move_projectile_left_exit
+
+    ldx L577f               ; weapon counter
+    ora boomerang_horizontal,x
+    sta L5280+$7
+    clc
+    rts                     ; exit without moving or registering a collision
+
+    move_projectile_left_not_boomerang:
+
+    cmp #6                          ; type 3 can destroy certain walls
+    bne move_projectile_left_exit
+
+    lda ($70),y                 ; load the tile to the left
+    cmp #1                      ; decoration can be destroyed
+    bne move_projectile_left_exit
+    clc
+
+    lda #0
+    sta ($70),y
+    
+    ; X=y, Y=x
+    jsr create_explosion
+    jsr plot_blank_xy           ; corrupted X
+
+    lda #<(L5280+$24)			; $52a4
+    sta $74
+    lda #>(L5280+$24)	
+    sta $75
+    jsr plot_character
+
+    ldx #0
+    jsr play_sound
+
+    lda #16                     ; prevent the player from firing a new
+    sta L578d                   ; projectile until the explosion has finished
+
+    move_projectile_left_exit:
+    sec
+    rts
+
+boomerang_horizontal: .byte $28, $38
+
+move_projectile_right:
+
+    ; Fire right.
+
+    lda L5280+$b
+    cmp #1			; cmp #2
+    beq move_projectile_right_check_x
+    cmp #2			; cmp #3
+    beq move_projectile_right_tile
+
+    inc L5280+$b
+    clc
+    rts
+
+    move_projectile_right_check_x:
+
+    lda L5280+$a       ; x
+    cmp #9
+    bne move_projectile_right_not_edge
+    jmp move_projectile_right_exit
+
+    move_projectile_right_not_edge:
+    clc
+    tay
+    iny                         ; x + 1
+    ldx L5280+$8                   ; y
+    lda room_row_offsets_low,x  ; read the address of the row
+    sta $70
+    lda room_row_offsets_high,x
+    sta $71
+    lda ($70),y                 ; load the tile to the right
+
+    cmp #0
+    bne move_projectile_right_wall
+
+    lda L5280+$9                   ; dy
+    cmp #3
+    bmi move_projectile_allow_right
+
+    clc                         ; dy > 2 so we need to check another tile
+    lda $70
+    adc #10
+    sta $70
+    lda ($70),y                 ; load the tile below and to the right
+    inx                         ; y += 1
+
+    cmp #0
+    bne move_projectile_right_wall
+
+    move_projectile_allow_right:
+
+    inc L5280+$b       ; dx
+    clc
+    rts
+
+    move_projectile_right_tile:
+
+    inc L5280+$a       ; x
+    lda #0
+    sta L5280+$b       ; dx
+    clc
+    rts
+
+    move_projectile_right_wall:  ; the projectile hit a wall
+    clc
+
+    lda L5280+$7                   ; type 2 can pass through walls
+    and #$06
+    cmp #4
+    beq move_projectile_allow_right
+
+    cmp #2
+    bne move_projectile_right_not_boomerang
+
+    lda L5280+$7
+    and #$0f
+    cmp #8
+    bpl move_projectile_right_exit
+
+    ldx L577f               ; weapon counter
+    ora boomerang_horizontal,x
+    sta L5280+$7
+    clc
+    rts                     ; exit without moving or registering a collision
+
+    move_projectile_right_not_boomerang:
+
+    cmp #6                      ; type 3 can destroy certain walls
+    bne move_projectile_right_exit
+
+    lda ($70),y                 ; load the tile to the right
+    cmp #1                      ; decoration can be destroyed
+    bne move_projectile_right_exit
+    clc
+
+    lda #0
+    sta ($70),y
+    
+    ; X=y, Y=x
+    jsr create_explosion
+    jsr plot_blank_xy           ; corrupted X
+
+    lda #<(L5280+$24)		; $52a4
+    sta $74
+    lda #>(L5280+$24)
+    sta $75
+    jsr plot_character
+
+    ldx #0
+    jsr play_sound
+
+    lda #16                     ; prevent the player from firing a new
+    sta L578d                   ; projectile until the explosion has finished
+
+    move_projectile_right_exit:
+    sec
+    rts
+
+move_projectile_up:
+
+    lda L5280+$9           ; read dy
+    cmp #0
+    beq move_projectile_up_check_y
+
+    dec L5280+$9
+    clc
+    rts
+    
+    move_projectile_up_check_y:     ; Check the y offset.
+
+    lda L5280+$8
+    cmp #0
+    bne move_projectile_up_not_edge
+    jmp move_projectile_up_exit
+
+    move_projectile_up_not_edge:
+    tax                         ; use the y offset as an index
+    dex                         ; y - 1
+    ldy L5280+$a                   ; load the x offset
+    lda room_row_offsets_low,x  ; read the address of the row
+    sta $70
+    lda room_row_offsets_high,x
+    sta $71
+    lda ($70),y                 ; load the tile above
+
+    cmp #0
+    bne move_projectile_up_wall
+
+    lda L5280+$b                   ; dx
+    cmp #2			; cmp# 3
+    bmi move_projectile_allow_up
+
+    clc                     ; dx > 2 so we need to check another tile
+    iny
+    lda ($70),y             ; load the tile above and to the right
+
+    cmp #0
+    bne move_projectile_up_wall
+
+    move_projectile_allow_up:
+    txa
+    sta L5280+$8               ; store the new room y offset
+    lda #3
+    sta L5280+$9               ; dy = 3
+
+    clc
+    rts
+
+    move_projectile_up_wall:    ; the projectile hit a wall
+    clc
+
+    lda L5280+$7                   ; type 2 can pass through walls
+    and #$06
+    cmp #4
+    beq move_projectile_allow_up
+
+    cmp #2
+    bne move_projectile_up_not_boomerang
+
+    lda L5280+$7
+    and #$0f
+    cmp #8
+    bpl move_projectile_up_exit
+
+    ldx L577f               ; weapon counter
+    ora boomerang_vertical,x
+    sta L5280+$7
+    clc
+    rts                     ; exit without moving or registering a collision
+
+    move_projectile_up_not_boomerang:
+
+    cmp #6                      ; type 3 can destroy certain walls
+    bne move_projectile_up_exit
+
+    lda ($70),y                 ; load the tile above
+    cmp #1                      ; decoration can be destroyed
+    bne move_projectile_up_exit
+    clc
+
+    lda #0
+    sta ($70),y
+    
+    ; X=y, Y=x
+    jsr create_explosion
+    jsr plot_blank_xy           ; corrupted X
+
+    lda #<(L5280+$24)		; $52a4
+    sta $74
+    lda #>(L5280+$24)
+    sta $75
+    jsr plot_character
+
+    ldx #0
+    jsr play_sound
+
+    lda #16                     ; prevent the player from firing a new
+    sta L578d                   ; projectile until the explosion has finished
+
+    move_projectile_up_exit:
+    sec
+    rts
+
+boomerang_vertical: .byte $08, $18
+
+move_projectile_down:
+
+    lda L5280+$9                   ; read dy
+    cmp #2
+    beq move_projectile_down_check_y
+    cmp #3
+    beq move_projectile_down_tile
+
+    inc L5280+$9                   ; 0 <= dy < 3
+    clc
+    rts
+
+    move_projectile_down_check_y:  ; Check the y offset.
+
+    lda L5280+$8
+    cmp #9
+    bne move_projectile_down_in_room
+    jmp move_projectile_down_exit
+
+    move_projectile_down_in_room:
+    clc
+    tax
+    inx                         ; y + 1
+    ldy L5280+$a                   ; load the x offset
+    lda room_row_offsets_low,x  ; read the address of the row
+    sta $70
+    lda room_row_offsets_high,x
+    sta $71
+    lda ($70),y                 ; load the tile below
+
+    cmp #0
+    bne move_projectile_down_wall
+
+    lda L5280+$b                   ; dx
+    cmp #2				; cmp #3
+    bmi move_projectile_allow_down
+
+    clc                         ; dx > 2 so we need to check another tile
+    iny
+    lda ($70),y                 ; load the tile below and to the right
+
+    cmp #0
+    bne move_projectile_down_wall
+
+    move_projectile_allow_down:
+
+    inc L5280+$9                   ; update dy
+    clc
+    rts
+
+    move_projectile_down_tile:
+
+    inc L5280+$8                   ; store the new room y offset
+    lda #0
+    sta L5280+$9                   ; dy = 0
+    clc
+    rts
+
+    move_projectile_down_wall:  ; the projectile hit a wall
+    clc
+
+    lda L5280+$7                   ; type 2 can pass through walls
+    and #$06
+    cmp #4
+    beq move_projectile_allow_down
+
+    cmp #2
+    bne move_projectile_down_not_boomerang
+
+    lda L5280+$7
+    and #$0f
+    cmp #8
+    bpl move_projectile_down_exit
+
+    ldx L577f               ; weapon counter
+    ora boomerang_vertical,x
+    sta L5280+$7
+    clc
+    rts                     ; exit without moving or registering a collision
+
+    move_projectile_down_not_boomerang:
+
+    cmp #6                      ; type 3 can destroy certain walls
+    bne move_projectile_down_exit
+
+    lda ($70),y                 ; load the tile below
+    cmp #1                      ; decoration can be destroyed
+    bne move_projectile_down_exit
+    clc
+
+    lda #0
+    sta ($70),y
+    
+    ; X=y, Y=x
+    jsr create_explosion
+    jsr plot_blank_xy           ; corrupted X
+
+    lda #<(L5280+$24)		; $52a4
+    sta $74
+    lda #>(L5280+$24)
+    sta $75
+    jsr plot_character
+
+    ldx #0
+    jsr play_sound
+
+    lda #16                     ; prevent the player from firing a new
+    sta L578d                   ; projectile until the explosion has finished
+
+    move_projectile_down_exit:
+    sec
+    rts
+
+move_projectile_animate:
+
+    lda L5280+$7
+    eor #1
+    sta L5280+$7
+    rts
+
+move_projectile:
+
+    lda L5280+$6
+    cmp #0
+    bne move_projectile_move
+    jmp move_projectile_exit
+
+    move_projectile_move:
+    clc
+
+    lda #<(L5280+$6)		; $5286
+    sta $74
+    lda #>(L5280+$6)
+    sta $75
+    jsr unplot_character
+
+    move_projectile_after_unplot:
+
+    lda L5280+$7
+    and #$30            ; direction
+
+    cmp #0
+    bne move_projectile_not_left
+
+    jsr move_projectile_left
+    bcc move_projectile_toggle
+    bcs move_projectile_destroy
+
+    move_projectile_not_left:
+    cmp #$10
+    bne move_projectile_not_right
+
+    jsr move_projectile_right
+    bcc move_projectile_toggle
+    bcs move_projectile_destroy
+
+    move_projectile_not_right:
+    cmp #$20
+    bne move_projectile_not_up
+
+    jsr move_projectile_up
+    bcc move_projectile_toggle
+    bcs move_projectile_destroy
+
+    move_projectile_not_up:
+    cmp #$30
+    bne move_projectile_toggle
+
+    jsr move_projectile_down
+    bcs move_projectile_destroy
+
+    move_projectile_toggle:
+
+    jsr projectile_collide
+    bcs move_projectile_destroy
+
+    jsr move_projectile_animate
+
+    lda #<(L5280+$6)		; $5286
+    sta $74
+    lda #>(L5280+$6)
+    sta $75
+    jmp plot_character          ; optimise away the rts
+
+    move_projectile_destroy:
+    clc
+
+    ldy #0
+    lda ($74),y ; type
+    cmp #8
+    bmi move_projectile_no_enemy_collision
+
+    and #$70            ; increase the player's score
+    lsr
+    lsr
+    lsr
+    adc #2
+    sta $70
+    jsr add_score
+    jmp move_projectile_create_explosion
+
+    move_projectile_no_enemy_collision:
+
+    cmp #4          ; items can be destroyed as well
+    bne move_projectile_no_item_collision
+
+    ldy #1          ; but not keys
+    lda ($74),y
+    cmp #4          ; even the mace is stopped by a key
+    beq move_projectile_remove_projectile
+    clc
+
+    jsr remove_room_item
+
+    move_projectile_create_explosion:
+
+    ; Unplot the item/enemy and replace it with an explosion.
+
+    jsr unplot_character
+
+    lda #3      ; explosion
+    ldy #0
+    sta ($74),y
+
+    lda #4
+    ldy #1
+    sta ($74),y
+
+    jsr plot_character
+
+    ; Play a sound.
+    ldx #0
+    jsr play_sound
+
+    move_projectile_no_item_collision:
+
+    lda L5280+$7       ; type 2 projectiles pass through everything
+    and #$06
+    cmp #4
+    bne move_projectile_remove_projectile
+
+    ; Ideally, we would have recorded if the projectile left the screen so
+    ; that we don't perform these checks again here, but it would just add
+    ; overhead to the normal movement routines for the other weapons.
+
+    lda L5280+$8       ; y
+    cmp #0
+    beq move_projectile_remove_projectile
+    cmp #9
+    beq move_projectile_remove_projectile
+
+    lda L5280+$a       ; x
+    cmp #0
+    beq move_projectile_remove_projectile
+    cmp #9
+    beq move_projectile_remove_projectile
+
+    clc
+    lda #<(L5280+$6)			; $5286
+    sta $74
+    lda #>(L5280+$6)
+    sta $75
+
+    jsr plot_character
+    jmp move_projectile_exit
+
+    move_projectile_remove_projectile:
+
+    lda #0              ; remove the projectile from the character list
+    sta L5280+$6
+
+    move_projectile_exit:
+    clc
+    rts
+
+emerge_characters:
+
+    lda #<(L5280+$c)		; $528c set the character address
+    sta $74
+    lda #>(L5280+$c)
+    sta $75
+
+    emerge_characters_loop:
+
+        ldy #0
+        lda ($74),y
+        cmp #0
+        bne emerge_characters_next
+
+        jmp emerge_character    ; optimise away the rts
+
+        emerge_characters_next:
+        clc
+
+        ; Examine the next character.
+        lda $74
+        adc #6
+
+        cmp #<(L5280+$c+4*6)
+        bpl emerge_characters_exit
+        sta $74
+        jmp emerge_characters_loop
+
+    emerge_characters_exit:
+    clc
+    rts
+
+enemy_slots: .byte 0, 6, 12, 18
+
+move_characters:
+
+    lda #<(L5280+$c)		; $528c set the character address
+    sta $74
+    lda #>(L5280+$c)
+    sta $75
+
+    lda L578e           ; read a value from 0 to 3 from the motion counter
+    and #3
+    tax
+    lda enemy_slots,x   ; look up the corresponding slot in the character list
+    adc $74
+    sta $74             ; update the character address
+
+    move_characters_loop:
+    
+        ldy #0
+        lda ($74),y
+        cmp #3
+        bne move_characters_not_emerge_explode
+
+        jsr emerge_explode
+        jmp move_characters_next
+
+        move_characters_not_emerge_explode:
+        cmp #8
+        bmi move_characters_next
+
+        jsr move_enemy
+
+        move_characters_next:
+        clc
+
+        lda $74                     ; for the last enemy, check the next slot
+        cmp #<(L5280+$c+3*6)        ; $9E for the presence of an explosion
+        bne move_characters_endloop ; otherwise leave the loop (only performing
+        clc                         ; one iteration)
+
+        adc #6
+        sta $74
+        jmp move_characters_loop
+
+    move_characters_endloop:
+    clc
+
+    ; Check collisions with the player.
+
+    jsr player_collide
+    bcs move_characters_collisions
+    jmp move_characters_exit
+
+    move_characters_collisions:
+    clc
+
+    ldy #0
+    lda ($74),y ; type
+    cmp #8
+    bpl move_character_destroy_enemy
+
+    ; Unplot the item.
+    jsr unplot_character
+
+    ; Remove it from the item table.
+    jsr remove_room_item
+
+    lda #0      ; remove the item from the character list
+    ldy #0
+    sta ($74),y
+
+    iny
+    lda ($74),y         ; get the item type
+
+    sta $8d             ; temporarily store A and increase the score
+    tax
+    lda item_scores,x
+    sta $70
+    jsr add_score
+    lda $8d
+
+    ; Check the item type.
+    cmp #8
+    bmi move_characters_not_health
+
+    lda #20
+    sta $70
+    jsr add_strength
+    clc
+
+    ldx #2
+    jsr play_sound
+
+    rts
+
+    move_characters_not_health:
+    cmp #5
+    bmi move_characters_not_treasure
+
+    ldx #2
+    jsr play_sound
+
+    clc
+    rts
+
+    move_characters_not_treasure:
+    cmp #4
+    bmi move_characters_not_key
+
+    ; Key - update the item/player flags byte.
+    lda L5780
+    ora #$01
+    sta L5780
+    clc
+
+    ldx #3
+    jsr play_sound
+
+    rts
+
+    move_characters_not_key:
+
+    ; Update the player's weapon.
+    asl
+    sta L5789
+    clc
+
+    ldx #2
+    jsr play_sound
+
+    rts
+
+    move_character_destroy_enemy:
+    
+    ; Unplot the enemy and replace it with an explosion.
+
+    jsr unplot_character
+
+    lda #3      ; explosion
+    ldy #0
+    sta ($74),y
+
+    lda #4
+    ldy #1
+    sta ($74),y
+
+    jsr plot_character
+
+    ; Reduce the player's strength.
+
+    ldx #1
+    jsr play_sound
+
+    lda #1
+    sta $70
+    jmp reduce_strength ; optimise away the rts
+
+    move_characters_exit:
+    clc
+    rts
+
+remove_room_item:
+
+    ldx L5782                       ; current room row number
+    lda eleven_times_table,x
+    adc L5782+1                       ; current room column number
+    tax
+    lda #$80    ; store a value with the top bit set instead of zero because we
+    sta L5200,x ; have visited this room if we can collect the object within it
+    clc
+    rts
+
+item_scores:     .byte $1,$4,$9,$16, $50,$20,$5,$10,$40
+score_digits:    .byte "0123456789"
+score_name:      .byte red+7,8,"aaaaaaaaa",0,$ff
+score_nr:        .byte red+0,1,"000000",0,$ff
+
+add_score:      ; $70=score to add
+
+    sed
+    lda L5786
+    adc $70
+    sta L5786
+    lda L5786+1
+    adc #0
+    sta L5786+1
+    lda L5786+2
+    adc #0
+    sta L5786+2
+    cld
+
+write_score:
+
+    lda #<L5786			;$5786
+    sta $70
+    lda #>L5786
+    sta $71
+
+	ldx #<score_nr
+	ldy #>score_nr
+	jsr PUTSTRING
+
+;--------------------------------------
+;Write score digits
+;--------------------------------------
+write_score_digits:     ; $70,$71=address of score bytes
+
+	ldx #0
+    ldy #2
+    write_score_loop:
+
+        lda ($70),y
+        lsr
+        lsr
+        lsr
+        lsr
+        clc
+	adc #$30
+	sta score_nr+2,x
+	inx
+
+        lda ($70),y
+        and #$0f
+        clc
+	adc #$30
+	sta score_nr+2,x
+	inx
+
+        dey
+        bpl write_score_loop
+
+	ldx #<score_nr
+	ldy #>score_nr
+	jsr PUTSTRING
+
+    clc
+    rts
+
+strength_units:          .byte $aa,$6a,$5a,$56
+
+add_strength:   ; $70=strength to add
+
+    ; Divide the initial strength by 4 to determine which half character to
+    ; start plotting at, and multiply by 8 to get the address. The net result
+    ; is to mask off the bottom two bits and shift left once.
+
+    lda L5784
+    adc $70
+    cmp #65
+    bmi add_strength_update
+
+    lda #64
+
+    add_strength_update:
+    clc
+    sta L5784   ; the final strength
+
+plot_strength:
+	lsr a
+	lsr a
+	tax         ; the number of units to add between the rounded original
+                ; strength and the final strength
+	lda #<$8170    ; the start of the strength bar
+	sta $72
+	lda #>$8170
+	sta $73
+
+	ldy #0
+	lda L5784
+	cmp #4
+	bmi add_strength_loop_extra
+
+	add_strength_loop:
+        clc
+        lda #$55
+        sta ($72),y
+	   iny
+	   dex
+        bne add_strength_loop
+
+	lda L5784
+	and #3
+
+    add_strength_loop_extra:
+    ; For any remaining units in excess of the multiples of four units, plot
+    ; the appropriate byte.
+	tax
+	lda strength_units,x
+	sta ($72),y
+
+    add_strength_exit:
+	clc
+	rts
+
+reduce_strength:    ; $70=strength to remove
+
+    lda L5784
+    tax
+    sec
+    sbc $70
+    bpl reduce_strength_update
+
+    lda #0
+
+    reduce_strength_update:
+    clc
+    sta L5784
+
+    ; Divide the final strength by 4 to determine which half character to
+    ; plot, and multiply by 8 to get the address. The net result is to mask off
+    ; the bottom two bits and shift left once.
+
+	jsr plot_strength
+
+    lda L5784
+    cmp #0
+    bne reduce_strength_exit
+
+    lda L5780       ; the player ran out of strength
+    ora #$40
+    sta L5780
+
+    lda #64         ; reset the delay counter
+    sta L5785
+
+    lda #<L5280		; $5280 unplot the player
+    sta $74
+    lda #>L5280
+    sta $75
+
+    jsr unplot_character
+
+    lda #8          ; change the player's direction to the demise animation
+    sta L5280+$1
+
+    jsr plot_character
+    jmp destroy_enemies ; optimise away the rts
+
+    reduce_strength_exit:
+    clc
+    rts
+
+destroy_enemies:
+
+    lda #<(L5280+$c)		; $528c
+    sta $74
+    lda #>(L5280+$c)
+    sta $75
+
+    destroy_enemies_loop:
+
+        ldy #0
+        lda ($74),y
+        cmp #8
+        bmi destroy_enemies_not_enemy
+
+        jsr unplot_character
+
+        lda #3          ; emerge/explosion
+        ldy #0
+        sta ($74),y
+
+        iny
+        lda #4          ; explosion
+        sta ($74),y
+
+        jsr plot_character
+        jmp destroy_enemies_not_emerging_enemy
+
+        destroy_enemies_not_enemy:
+        cmp #3
+        bne destroy_enemies_not_emerging_enemy
+
+        jsr unplot_character
+
+        iny             ; whether emerging or exploding, ensure that the enemy
+        lda ($74),y     ; is now exploding
+        ora #4
+        sta ($74),y
+
+        jsr plot_character
+
+        destroy_enemies_not_emerging_enemy:
+        clc
+        lda $74
+        adc #6
+        sta $74
+        cmp #<(L5280+$c+4*6)		; $a4
+        bmi destroy_enemies_loop
+
+    clc
+    rts
+
+remove_characters:
+
+    ; Clear the character table.
+
+    ldx #6
+    remove_characters_loop:
+        lda #0
+        sta L5280,x
+        txa
+        adc #6
+        tax
+        cpx #$2a
+        bmi remove_characters_loop
+
+    rts
+
+; The player collision masks use bits to represent where the player is in a
+; tile. See the collisions.txt file for more information.
+
+; Player is above, enemy is below, checking the overlap in the lower tile.
+player_collision_mask_above: .byte $00, $c0, $f0, $fc
+
+projectile_collision_mask_above: .byte $00, $00, $00, $80
+
+; Player and enemy share the same tile or player is on the tile below.
+player_collision_mask_below:  .byte $ff, $3f, $0f, $03
+
+projectile_collision_mask_below: .byte $e0, $38, $0e, $03
+
+; Player is above or on the same tile, enemy is below, checking the overlap in
+; the lower tile.
+enemy_collision_mask_above:  .byte $f8, $3f, $0f, $03
+
+; Enemy is above, player is below, checking the overlap in the lower tile.
+enemy_collision_mask_below: .byte $00, $00, $c0, $f0
+
+; Player is to the left, enemy is to the right, checking the overlap in the
+; right hand tile.
+player_collision_mask_left:
+projectile_collision_mask_left: .byte $00,$00,$08		;,$08
+
+; Player and enemy share the same tile or player is on the tile to the right.
+player_collision_mask_right:
+projectile_collision_mask_right: .byte $0c, $06, $03		;,$01
+
+; Player is to the left, enemy is to the right or on the same tile, checking
+; the overlap in the right hand tile.
+enemy_collision_mask_left:  .byte $0f, $07, $03			;,$01
+
+; Enemy is to the left, player is to the right, checking the overlap in the
+; right hand tile.
+enemy_collision_mask_right: .byte $00, $08, $0c			;,$0e
+
+player_collide:
+
+    lda L5280+$2                           ; player y
+    sta $8a
+    lda L5280+$4                           ; player x
+    sta $8b
+
+    ldx L5280+$3                           ; player dy
+    lda player_collision_mask_above,x
+    sta $86
+    lda player_collision_mask_below,x
+    sta $88
+    ldx L5280+$5                           ; player dx
+    lda player_collision_mask_left,x
+    sta $87
+    lda player_collision_mask_right,x
+    sta $89
+
+    jmp collide ; optimise away the rts
+
+projectile_collide:
+
+    lda L5280+$8                           ; projectile y
+    sta $8a
+    lda L5280+$a                           ; projectile x
+    sta $8b
+
+    ldx L5280+$9                           ; projectile dy
+    lda projectile_collision_mask_above,x
+    sta $86
+    lda projectile_collision_mask_below,x
+    sta $88
+    ldx L5280+$b                           ; projectile dx
+    lda projectile_collision_mask_left,x
+    sta $87
+    lda projectile_collision_mask_right,x
+    sta $89
+
+    ; Run on into the next routine.
+
+collide:
+
+    lda #<(L5280+$c)		; $528c set the character address
+    sta $74
+    lda #>(L5280+$c)
+    sta $75
+
+    collide_loop:
+
+        ldy #0
+        lda ($74),y         ; type
+        cmp #4
+        bpl collide_check
+
+        jmp collide_next
+
+        collide_check:
+
+        ldy #2
+        lda ($74),y         ; y
+        sec
+        sbc $8a             ; y - player/projectile y
+        beq check_collide_y_equal
+        cmp #1
+        beq check_collide_y_greater
+        cmp #255
+        beq check_collide_y_less
+
+        jmp collide_next
+
+        check_collide_y_equal:
+        ; The enemy is on the same tile as the player/projectile so look at the
+        ; collision on their common tile.
+        ldy #3
+        lda ($74),y                         ; dy
+        tax
+        lda enemy_collision_mask_above,x
+        and $88                             ; player/projectile mask below
+        bne check_collide_x
+
+        jmp collide_next
+
+        check_collide_y_greater:
+        ; The enemy is on the tile below the player/projectile so look at the
+        ; collision on the enemy's tile.
+        ldy #3
+        lda ($74),y                         ; dy
+        tax
+        lda enemy_collision_mask_above,x
+        and $86                             ; player mask above
+        bne check_collide_x
+
+        jmp collide_next
+
+        check_collide_y_less:
+        ; The enemy is on the tile above the player/projectile so look at the
+        ; collision on the player's tile.
+        ldy #3
+        lda ($74),y                         ; dy
+        tax
+        lda enemy_collision_mask_below,x
+        and $88                             ; player mask below
+        bne check_collide_x
+
+        jmp collide_next
+
+        check_collide_x:
+        ldy #4
+        lda ($74),y         ; x
+        sec
+        sbc $8b             ; x - player/projectile x
+        beq check_collide_x_equal
+        cmp #1
+        beq check_collide_x_greater
+        cmp #255
+        beq check_collide_x_less
+
+        jmp collide_next
+
+        check_collide_x_equal:
+        ; The enemy is on the same tile as the player/projectile so look at the
+        ; collision on their common tile.
+        ldy #5
+        lda ($74),y                         ; dx
+        tax
+        lda enemy_collision_mask_left,x
+        and $89                             ; player mask right
+        bne check_collide_destroy
+
+        jmp collide_next
+
+        check_collide_x_greater:
+        ; The enemy is the tile to the right of the player/projectile so look
+        ; at the collision on the enemy's tile.
+        ldy #5
+        lda ($74),y                         ; dx
+        tax
+        lda enemy_collision_mask_left,x
+        and $87                             ; player mask left
+        bne check_collide_destroy
+
+        jmp collide_next
+
+        check_collide_x_less:
+        ; The enemy is the tile to the left of the player/projectile so look at
+        ; the collision on the player's tile.
+        ldy #5
+        lda ($74),y                         ; dx
+        tax
+        lda enemy_collision_mask_right,x
+        and $89                             ; player mask right
+        bne check_collide_destroy
+
+        collide_next:
+        clc
+
+        ; Examine the next character.
+        lda $74
+        adc #6
+
+        cmp #<(L5280+$c+4*6)		; $a4
+        bpl collide_exit
+        sta $74
+        jmp collide_loop
+
+    check_collide_destroy:
+
+    sec         ; set the carry flag to inform the caller that the
+    rts         ; player/projectile should be destroyed
+
+    collide_exit:
+    clc
+    rts
+
+;sounds_low:  .byte <explosion_sound, <damage_sound, <item_sound, <key_sound, <note_sound, <emerge_sound
+;sounds_high: .byte >explosion_sound, >damage_sound, >item_sound, >key_sound, >note_sound, >emerge_sound
+
+;explosion_sound: .byte 1,0, 1,0, 60,0, 2,0
+;damage_sound:    .byte 1,0, 2,0, 40,0, 4,0
+;item_sound:      .byte $13,0, 3,0, 32,0, 3,0
+;key_sound:       .byte $13,0, 4,0, 50,0, 5,0
+;emerge_sound:    .byte 2,0, 3,0, 0,0, 2,0
+
+;note_sound=L5760
+;note_pitch=L5760+4
+;note_duration=L5760+6
+
+play_note:      ; A=duration, X=pitch
+	sta tmp_note
+lda L579d
+	beq note_play
+	rts
+note_play:
+	lda tmp_note
+	ldy #2
+	jsr sound
+	rts
+
+;    sta note_pitch
+;    sty note_duration
+;    ldx #4
+    ; Run on into the next routine.
+
+play_sound:     ; X=sound number
+	lda L579d
+	beq snd_play
+	rts
+snd_play:
+	cpx #0
+	bne chk_snd1
+	jmp play_snd0
+chk_snd1:
+	cpx #1
+	bne chk_snd2
+	jmp play_snd1
+chk_snd2:
+	cpx #2
+	bne chk_snd3
+	jmp play_snd2
+chk_snd3:
+	cpx #3
+	bne chk_snd5
+	jmp play_snd3
+chk_snd5:
+	cpx #5
+	bne no_snd
+	jmp play_snd5
+no_snd:
+	rts
+
+
+play_snd0:		; Explosion
+	lda #40
+	sta tmp_note
+snd0_loop:
+	lda #2
+	ldx tmp_note
+	ldy #2
+	jsr sound
+	inc tmp_note
+	inc tmp_note
+	inc tmp_note
+	inc tmp_note
+	lda tmp_note
+	cmp #64
+	bne snd0_loop
+	rts
+	
+play_snd1:		; Damage
+	lda #20
+	sta tmp_note
+snd1_loop:
+	lda #2
+	ldx tmp_note
+	ldy #2
+	jsr sound
+	inc tmp_note
+	inc tmp_note
+	inc tmp_note
+	inc tmp_note
+	lda tmp_note
+	cmp #44
+	bne snd1_loop
+	rts
+
+play_snd2:		; Item
+	lda #44
+	sta tmp_note
+snd2_loop:
+	lda #1
+	ldx tmp_note
+	ldy #2
+	jsr sound
+	dec tmp_note
+	dec tmp_note
+	dec tmp_note
+	dec tmp_note
+	lda tmp_note
+	cmp #20
+	bne snd2_loop
+	rts
+
+play_snd3:		; Key
+	lda #14
+	sta tmp_note
+snd3_loop:
+	lda #2
+	ldx tmp_note
+	ldy #8
+	jsr sound
+	dec tmp_note
+	lda tmp_note
+	cmp #10
+	bne snd3_loop
+	rts
+
+play_snd5:		; Emerge
+	lda #14
+	sta tmp_note
+snd5_loop:
+	lda #2
+	ldx tmp_note
+	ldy #8
+	jsr sound
+	dec tmp_note
+	lda tmp_note
+	cmp #10
+	bne snd5_loop
+	rts
+
+tmp_note:
+	.byte 0,0
+
+;    lda sounds_high,x
+;    tay
+;    lda sounds_low,x
+;    tax
+;    lda #7
+;    jsr $fff1
+;    rts
+
+;-----------------------------------
+;Copy title screen from #1800->#8000
+;-----------------------------------
+copy_title_up:
+
+    lda #<title
+    sta $70
+    lda #>title
+    sta $71
+
+    lda #$00
+    sta $72
+    lda #$80
+    sta $73
+
+    ldx #5
+    ; Run on into the next routine.
+
+copy_title:
+
+    copy_title_loop1:
+
+        ldy #0
+        copy_title_loop2:
+
+            lda ($70),y
+            sta ($72),y
+            iny
+            cpy #0
+            bne copy_title_loop2
+
+        inc $71
+        inc $73
+
+        dex
+        bpl copy_title_loop1
+
+    rts
+
+copy_completed_screen_up:
+
+    lda #<complete
+    sta $70
+    lda #>complete
+    sta $71
+
+    lda #$00
+    sta $72
+    lda #$81
+    sta $73
+
+    ldx #8
+    jmp copy_title  ; optimise away the rts
+
+;--------------------------------
+;Initialize program
+;--------------------------------
+init:
+    ; Set up note data.
+    ldx #7
+    set_up_note_loop:
+        lda note_data,x
+        sta L5760,x
+        dex
+        bpl set_up_note_loop
+
+    ldx #$86
+    jsr cls     ; clear the text window
+
+    ; Define the default high scores.
+    ldy #0
+    lda #<L5180		; $5180
+    sta $70
+    lda #>L5180
+    sta $71
+    lda #$16
+    sta $72
+
+    ldx #0
+    init_define_high_scores_loop:
+
+        lda #0
+        sta ($70),y
+        iny
+        lda $72
+        sta ($70),y
+        iny
+        lda #0
+        sta ($70),y
+
+        iny
+        init_define_high_score_name_loop:
+
+            lda high_score_default_name1,x
+            sta ($70),y
+            iny
+            inx
+            cpx #9
+            beq init_define_high_scores_next
+            cpx #18
+            bne init_define_high_score_name_loop
+
+        ldx #0
+        init_define_high_scores_next:
+
+        sed
+        lda $72
+        sec
+        sbc #2
+        sta $72
+        cld
+        clc
+
+        cpy #96
+        bne init_define_high_scores_loop
+
+    ; Disable joystick support.
+    jsr joyinit
+    lda #0
+    sta L577e
+	sta L579d	; Sound on
+
+    rts
+
+note_data: .byte $13,0, 241,255, 0,0, 4,0
+
+high_score_default_name1: .byte "RETRO    "
+high_score_default_name2: .byte " SOFTWARE"
+
+title_vdu_bytes:    .byte green+4,21, "to play",0,$ff
+input_message:      .byte green+0,20,  "Press SPACE/FIRE",0,$ff
+title_vdu_bytes1:   .byte yellow+0,23, " Copyright 2011 ",0,$ff
+title_vdu_bytes2:   .byte yellow+0,23, "David Boddie for",0,$ff
+title_vdu_bytes3:   .byte red+0,23,    " Retro Software ",0,$ff
+title_vdu_bytes4:   .byte yellow+0,23, "    GNU GPL3+   ",0,$ff
+title_vdu_bytes5:   .byte yellow+0,23, " Atomic version ",0,$ff
+title_vdu_bytes6:   .byte yellow+0,23, "  Kees van Oss  ",0,$ff
+
+message_tab_lb:
+	.byte <title_vdu_bytes1,<title_vdu_bytes2,<title_vdu_bytes3
+	.byte <title_vdu_bytes4,<title_vdu_bytes5,<title_vdu_bytes6
+message_tab_hb:
+	.byte >title_vdu_bytes1,>title_vdu_bytes2,>title_vdu_bytes3
+	.byte >title_vdu_bytes4,>title_vdu_bytes5,>title_vdu_bytes6
+
+complete_palette_bytes: .byte 2,4, 3,5, 1,4, 3,3, 2,2
+
+set_complete_palette:
+
+    lda #0
+    sta $80
+    lda #25
+    sta $81
+
+    set_complete_palette_loop:
+
+        jsr wait_for_vsync
+
+        dec $81
+        lda $81
+        cmp #0
+        bne set_complete_palette_loop
+
+        lda #25
+        sta $81
+
+        ldx $80
+        lda complete_palette_bytes,x
+        sta $70
+        inx 
+        lda complete_palette_bytes,x
+        sta $71
+        inx
+        stx $80
+
+        lda $80
+        cmp #10
+        bne set_complete_palette_loop
+
+    rts
+
+;--------------------------------
+;Show title screen
+;--------------------------------
+show_title:
+
+	ldx #<title_vdu_bytes	; Rotating bottom text, ok
+	ldy #>title_vdu_bytes
+	jsr PUTSTRING
+
+    jsr show_input_message	; Space/fire to play text, ok
+
+    ; Show the title.
+    jsr copy_title_up		; Print header
+
+    ; Show the high scores.
+
+    lda #<L5180			; $5180 = High Score
+    sta $70
+    lda #>L5180
+    sta $71
+
+    lda #7			; Y=8 pos High score table!!!!!!!!
+    sta $80
+
+	lda #0
+	sta linecount
+
+    show_title_high_scores_loop:
+
+	lda #red+0
+	sta score_nr
+        lda $80
+	sta score_name+1
+	sta score_nr+1
+	inc $80
+	inc $80		; !!!!!!!!!!!!!!!!!!
+        clc
+
+        jsr write_score_digits	; Print digits
+
+        ldx #0		; Print high score name
+        ldy #3
+        show_title_high_scores_vdu_loop2:
+
+            lda ($70),y
+	    sta score_name+2,x
+
+            iny
+            inx
+	    cpx #09
+            bne show_title_high_scores_vdu_loop2
+
+	ldx #<score_name	; Print High score line
+	ldy #>score_name
+	jsr PUTSTRING
+
+	clc			; Point to next score table entry
+	lda $70
+        adc #12
+        sta $70
+	lda #0
+	adc $71
+	sta $71
+        inc linecount
+	   lda linecount
+	   cmp #6
+        bne show_title_high_scores_loop
+
+    lda #0			; Rotating message counter
+    sta $72
+
+    show_title_wait_loop:
+
+        lda #150		; Delay
+        sta L5785
+
+	ldy $72			; Print string
+	ldx message_tab_lb,y
+	lda message_tab_hb,y
+	tay
+	jsr PUTSTRING
+
+	inc $72			; Next string
+	lda $72
+	cmp #6
+        beq show_title_wait_reset_offset
+	
+        jmp show_title_wait_inner_loop
+
+        show_title_wait_reset_offset:
+        lda #0			; Reset rotating pointer
+        sta $72
+
+        show_title_wait_inner_loop:
+        jsr wait_for_vsync	; Wait for flyback
+
+        dec L5785		; Dec delaycounter
+        beq show_title_wait_loop
+
+        show_title_wait_loop_no_update:
+		jsr joyget
+		and #$10		; fire button pressed?
+	
+;        lda #128
+;        ldx #0
+;        jsr $fff4
+;        cpx #0              ; fire button pressed?
+        beq show_title_no_joystick
+       
+        lda #1              ; enable joystick support
+        sta L577e
+        jmp show_title_exit
+
+        show_title_no_joystick:
+        ldx #0            	; SPACE
+        jsr check_key		; If Space, exit rotating text loop
+        cpy #255
+        bne show_title_wait_inner_loop
+
+    lda #0              ; disable joystick support
+    sta L577e
+
+    show_title_exit:
+    clc
+    rts
+
+linecount:		.byte 0
+
+;----------------------------------
+;Show bottom testline
+;----------------------------------
+show_input_message:
+
+	ldx #<input_message
+	ldy #>input_message
+	jsr PUTSTRING
+
+    rts
+
+wait_for_vsync:
+
+	jmp $fe66
+
+game_over_vdu_bytes: .byte green+1,12, "             ",0
+                     .byte green+1,13, " The journey ",0
+                     .byte green+1,14, "   is over   ",0
+                     .byte green+1,15, "             ",0,$ff
+
+delay:
+
+    delay_loop:
+
+        jsr wait_for_vsync
+        dec L5785
+        bne delay_loop
+
+    rts
+
+show_game_over:
+
+    lda #128
+    sta L5785
+    jsr delay
+
+	ldx #<game_over_vdu_bytes
+	ldy #>game_over_vdu_bytes
+	jsr PUTSTRING
+
+    lda #192
+    sta L5785
+    jsr delay
+
+    rts
+
+end_of_level_bytes1:	.byte yellow+2,3, "Extra  bonus",0
+			.byte yellow+9,5,"x 9",0,$ff
+end_of_level_bytes2:	.byte green+3,20, "My journey",0
+			.byte green+3,22,"continues!",0,$ff
+
+show_end_of_level_screen:
+
+    ; Draw a decorative room.
+
+    ldx #$80
+    jsr cls
+    jsr make_empty_room
+
+    ldx #5
+    end_of_level_h_walls_loop:
+
+        lda #3
+        sta L579c+22,x
+        sta L579c+72,x
+        dex
+        bpl end_of_level_h_walls_loop
+
+    ldx #30
+    end_of_level_v_walls_loop:
+
+        lda #3
+        sta L579c+32,x
+        sta L579c+37,x
+        txa
+        sec
+        sbc #10
+        tax
+        bpl end_of_level_v_walls_loop
+
+    jsr plot_room_tiles
+
+    ldx #0
+    end_of_level_text_loop1:
+
+
+	ldx #<end_of_level_bytes1
+	ldy #>end_of_level_bytes1
+	jsr PUTSTRING
+
+    ; Count the number of rooms explored.
+    ldx #0
+    lda #0
+    sta $8d
+    sta $8e
+    end_of_level_room_count_loop:
+
+        lda L5200,x
+        and #$80
+        beq end_of_level_room_count_loop_next
+
+        sed
+        lda $8d
+        adc #1
+        sta $8d
+        lda $8e
+        adc #0
+        sta $8e
+        cld
+        clc
+
+        end_of_level_room_count_loop_next:
+        inx
+        cpx #121
+        bne end_of_level_room_count_loop
+
+    ; Position the player so that we can perform an animation.
+    jsr position_player_set_up_plotting
+
+    lda $8d
+    sta $70
+    lda $8e
+    sta $71
+    jsr write_bonus
+
+    lda #0      ; reset motion counter
+    sta L578e
+
+    show_end_of_level_bonus_loop:
+
+        jsr wait_for_vsync
+
+        clc
+        lda L578e
+        and #15
+        bne end_of_level_no_animation
+
+        ; Animate the player.
+
+        jsr reset_unplot_buffer
+        jsr reset_plot_buffer
+
+        ; $74,$75 should be unchanged
+        jsr unplot_character
+
+        lda L5280+$1
+        eor #1
+        sta L5280+$1
+        jsr plot_character
+
+        jsr plot_buffer
+
+        end_of_level_no_animation:
+        clc
+        lda L578e
+        and #3
+        bne end_of_level_no_countdown
+
+        ; Transfer the bonus to the score.
+
+        sed
+        sec
+        lda $8d
+        sbc #1
+        sta $8d
+        sta $70
+        lda $8e
+        sbc #0
+        sta $8e
+        sta $71
+        cld
+        clc
+
+        jsr write_bonus
+
+        lda #9
+        sta $70
+        jsr add_score
+
+        lda $8d
+        and #$3f
+        asl
+	tax
+        lda #1
+        jsr play_note
+
+        end_of_level_no_countdown:
+        inc L578e   ; update motion counter
+        clc
+
+        lda $8d
+        cmp #0
+        bne show_end_of_level_bonus_loop
+
+        lda $8e
+        cmp #0
+        bne show_end_of_level_bonus_loop
+
+    lda #64    ; initialise delay counter
+    sta L5785
+    jsr delay
+
+    ldx #0
+    end_of_level_text_loop2:
+
+	ldx #<end_of_level_bytes2
+	ldy #>end_of_level_bytes2
+	jsr PUTSTRING
+
+    lda L578a
+    cmp #3
+    bpl show_end_of_level_screen_exit
+
+    lda #192    ; initialise delay counter
+    sta L5785
+    jsr delay
+
+    show_end_of_level_screen_exit:
+    rts
+
+level_bonus_vdu_bytes: .byte red+4,5,"0000",0,$ff
+
+write_bonus:        ; $70,$71=value
+                    ; $72,$73=address of VDU codes
+
+    write_bonus_loop:
+
+        lda $71
+        lsr
+        lsr
+        lsr
+        lsr
+        tax
+        lda score_digits,x
+	sta level_bonus_vdu_bytes+2
+        lda $71
+        and #$0f
+        tax
+        lda score_digits,x
+	sta level_bonus_vdu_bytes+3
+
+        lda $70
+        lsr
+        lsr
+        lsr
+        lsr
+        tax
+        lda score_digits,x
+	sta level_bonus_vdu_bytes+4
+        lda $70
+        and #$0f
+        tax
+        lda score_digits,x
+	sta level_bonus_vdu_bytes+5
+
+	ldx #<level_bonus_vdu_bytes
+	ldy #>level_bonus_vdu_bytes
+	jsr PUTSTRING
+    clc
+    rts
+
+position_player_set_up_plotting:
+
+    jsr reset_player_position
+    jsr remove_characters
+
+    jsr reset_unplot_buffer
+    jsr reset_plot_buffer
+
+    ; Run on into the next routine.
+
+plot_the_player:
+
+    lda #<L5280		; $5280 plot the player
+    sta $74
+    lda #>L5280
+    sta $75
+    jsr plot_character
+
+    jsr plot_buffer
+    rts
+
+complete_game_vdu_bytes:  .byte yellow+0,11, "Congratulations!",0
+                          .byte  green+0,13, "  Now journey   ",0
+                          .byte  green+0,15, "  onward to a   ",0
+                          .byte  green+0,17, " new adventure  ",0,$ff
+
+show_complete_game:
+
+    ldx #$80
+    jsr cls
+
+	ldx #<complete_game_vdu_bytes
+	ldy #>complete_game_vdu_bytes
+	jsr PUTSTRING
+
+    jsr copy_completed_screen_up
+
+    jsr set_complete_palette
+
+    lda #255
+    sta L5785
+
+    show_complete_game_delay_loop:
+
+        jsr wait_for_vsync
+
+        dec L5785
+        bne show_complete_game_no_message
+
+        jsr show_input_message
+
+        show_complete_game_no_message:
+
+        lda #128
+        ldx #0
+;        jsr $fff4
+        cpx #0              ; fire button pressed?
+        beq show_complete_game_no_joystick
+        jmp show_complete_game_exit
+
+        show_complete_game_no_joystick:
+
+        ldx #0		; SPACE
+        jsr check_key
+        cpy #255
+        bne show_complete_game_delay_loop
+
+    show_complete_game_exit:
+    clc
+    rts
+
+check_high_scores:
+
+    ; Start at the bottom of the table, moving scores down as necessary, and
+    ; write in the current score at the appropriate place.
+
+    lda #<L5786		;$5786 current score
+    sta $70
+    lda #>L5786
+    sta $71
+
+    lda #<L5180		; $5180
+    sta $72
+    lda #>L5180
+    sta $73
+
+    check_high_scores_loop:
+
+        ldy #2
+        check_high_scores_digits_loop:
+
+            lda ($72),y
+            cmp ($70),y     ; existing score less than current score?
+            bcc check_high_scores_move_down
+            beq check_high_scores_digits_next   ; keep checking digits if equal
+            jmp check_high_scores_next
+
+            check_high_scores_digits_next:
+            dey
+            bpl check_high_scores_digits_loop
+
+        check_high_scores_next:
+        clc
+        lda $72
+        adc #12
+        sta $72
+        cmp #<(L5180+6*12)		; $e0
+        bne check_high_scores_loop
+
+    ; The player's score didn't make it into the high score table.
+    rts
+
+check_high_scores_move_down:    ; $70,$71=pointer to current score
+                                ; $72,$73=pointer to old score
+
+    ; The current score exceeded the existing entry. Make a note of the
+    ; position in the high score table, insert the player's score, and take
+    ; the old score
+
+    lda $72     ; Record the position in the high score table of the
+    sta $8d     ; player's score.
+    lda $73
+    sta $8e
+
+    lda #<(L5180+$60)			; $51e0
+    sta $74
+    lda #>(L5180+$60)
+    sta $75
+
+    ldy #0
+    insert_blank_player_name_loop:
+
+        cpy #3
+        bpl insert_blank_player_name_score_only
+
+        lda ($70),y
+        jmp insert_blank_player_name_store
+
+        insert_blank_player_name_score_only:
+        lda #32
+
+        insert_blank_player_name_store:
+        sta ($74),y
+        iny
+        cpy #12
+        bne insert_blank_player_name_loop
+
+    check_high_scores_move_down_loop:
+
+        ldy #0
+        check_high_scores_copy_score_and_name:
+
+            lda ($72),y ; swap the current score with the score in the table
+            tax
+            lda ($74),y
+            sta ($72),y
+            txa
+            sta ($74),y
+            iny
+            cpy #12
+            bne check_high_scores_copy_score_and_name
+
+        clc
+        lda $72
+        adc #12
+        sta $72
+        cmp #<(L5180+$60)
+        bne check_high_scores_move_down_loop
+
+    ; Draw a decorative room.
+
+	ldx #$80
+	jsr cls
+	jsr make_empty_room
+
+    lda #3
+    sta $76
+    sta $77
+    jsr draw_top_line
+    jsr draw_bottom_line
+    jsr draw_left_line
+
+    lda #0
+    sta $77
+    jsr draw_right_line
+
+    jsr plot_room_tiles
+
+    ; Add text characters to the room.
+	lda #yellow
+	jsr setcolor
+
+    lda #3          ; x
+    sta $70
+    lda #6          ; y
+    sta $71
+
+    lda #65
+    sta $72
+
+    ldx #3
+    plot_text_characters_loop:
+
+        jsr print_xy
+
+        clc
+	lda $70
+        adc #3
+        sta $70
+
+        dex
+        bpl plot_text_characters_next
+
+       lda #3
+        sta $70
+        clc
+	lda $71
+        adc #2
+        sta $71
+
+        ldx #3
+
+        plot_text_characters_next:
+
+        inc $72
+        lda $72
+        cmp #91
+        bne plot_text_characters_loop
+
+    lda #9
+    sta $70
+    lda #95         ; _ representing a space
+    sta $72
+    jsr print_xy
+
+    lda #12
+    sta $70
+    lda #60         ; < representing delete
+    sta $72
+    jsr print_xy
+
+    ; Put the player in the centre of the room.
+    jsr position_player_set_up_plotting
+
+    lda #0          ; reset motion counter
+    sta L578e
+
+    lda #0          ; not on a character
+    sta L578d
+
+    lda #0          ; reset the level number so that the correct tiles are used
+    sta L578a
+
+    lda #3          ; cursor position in the high score entry held in $8d,$8e
+    sta $8f
+
+	ldx #<high_score_vdu_bytes
+	ldy #>high_score_vdu_bytes
+	jsr PUTSTRING
+
+    high_score_entry_loop:
+
+        jsr reset_unplot_buffer
+        jsr reset_plot_buffer
+
+        jsr move_player
+	jsr wait_for_vsync
+
+        ; Check if the player leaves the room.
+        bcc high_score_entry_check_position
+        jmp high_score_entry_after_loop
+
+        high_score_entry_check_position:
+
+        lda L5280+$5       ; dx
+        cmp #2
+        beq high_score_entry_maybe_aligned
+        jmp high_score_entry_not_aligned
+
+        high_score_entry_maybe_aligned:
+
+        lda L5280+$2       ; y
+        tay
+        cmp #8
+        bpl high_score_entry_not_aligned
+
+        lda L5280+$4       ; x
+        tax
+        cmp #9
+        beq high_score_entry_not_aligned
+        and #1
+        beq high_score_entry_not_aligned
+
+        lda L5280+$3       ; dy
+        cmp #2
+        bmi high_score_entry_aligned
+        jmp high_score_entry_not_aligned
+
+        lda L5280+$2       ; y again (don't apply the touching rule to the bottom
+        cmp #7          ;          row of characters)
+        beq high_score_entry_not_aligned
+
+        iny             ; we are really touching the character below
+
+        high_score_entry_aligned:
+
+        lda L578d
+        cmp #1
+        beq high_score_entry_next
+
+        ; The player is aligned with a letter.
+        txa
+        sec
+        sbc #1
+        lsr
+        sta $7e         ; record (x - 1) / 2
+
+        tya             ; recall y
+        sec
+        sbc #1
+        asl
+        asl             ; (y - 1) * 4
+        clc
+
+        adc $7e         ; (y - 1) * 4 + (x - 1) / 2
+        adc #65
+        sta $7e         ; record the ASCII code
+
+        cmp #91
+        bmi insert_character
+
+        cmp #92
+        beq delete_character
+
+        ; Insert a space.
+        lda #32
+        sta $7e
+
+        insert_character:
+        lda $8f
+        cmp #12
+        bpl high_score_entry_pressed
+
+        tay             ; insert the character
+        lda $7e
+        sta ($8d),y
+        jsr print_high_score_character
+
+        inc $8f
+        jmp high_score_entry_pressed
+
+        delete_character:
+        lda $8f
+        cmp #4
+        bmi high_score_entry_pressed
+
+        cmp #12
+        beq high_score_delete_previous_character
+
+        tay
+        lda #32         ; insert a space
+        sta ($8d),y
+        jsr print_high_score_character
+
+        high_score_delete_previous_character:
+        dec $8f
+        lda $8f
+        tay             ; insert a space
+        lda #32
+        sta ($8d),y
+        jsr print_high_score_character
+
+        high_score_entry_pressed:
+        lda #1
+        sta L578d
+        jmp high_score_entry_next
+
+        high_score_entry_not_aligned:
+        lda #0
+        sta L578d
+
+        high_score_entry_next:
+
+        jsr wait_for_vsync
+        jsr plot_buffer
+
+        jmp high_score_entry_loop
+
+        inc L578e
+        clc
+
+    high_score_entry_after_loop:
+    clc
+
+	ldx #$80
+    jsr cls
+
+    rts
+
+high_score_vdu_bytes: .byte red+0,1, "Enter your name!",0
+                      .byte yellow+3,22, ">         <",0,$ff
+
+cls:
+	stx $91
+	lda #$f0
+	sta $b000
+	lda #<$8000
+	sta $90
+	lda #$00
+
+yloop:
+	ldy #0
+xloop:
+	sta ($90),y
+	iny
+	bne xloop
+	inc $91
+	ldx $91
+	cpx #$98
+	bne yloop
+
+	rts
+
+print_high_score_character:  ; A=ASCII code
+
+    clc
+    sta $72         ; store the character
+    lda $8f
+    adc #1
+    sta $70         ; store the x position of the character
+    lda #22
+    sta $71
+    ; Run on into the next routine.
+
+print_xy:
+
+	stx x_tmp
+	ldx $70
+	ldy $71
+	lda $72
+	jsr PUTCHAR
+	ldx x_tmp
+	rts
+
+x_tmp:		.byte 0
+
+disable_sound:  ; X=1 (disable); X=0 (enable)
+	stx L579d
+	rts
+
+status_vdu_bytes: .byte yellow+1,0,"Score",0,green+8,0, "Strength",0,$ff
+
+start_new_game:
+
+    ; Clear the screen.
+	ldx #$80
+    jsr cls
+
+    ; Set the level.
+    lda #0
+    sta L578a
+
+    ; Set the score.
+    lda #0
+    sta L5786
+    lda #0
+    sta L5786+1
+    lda #0
+    sta L5786+2
+
+    ; Blank the screen now because it will be blanked before the room is shown
+    ; and otherwise the strength bar will show briefly.
+
+    ; Set the player's strength.
+    lda #0
+    sta L5784
+    lda #64
+    sta $70
+    jsr add_strength		; ok
+
+    ; Set the projectile type.
+    lda #0
+    sta L5789
+
+    rts
+
+reset_player_position:
+
+    lda #1      ; player
+    sta L5280
+    lda #6      ; down (first frame)
+    sta L5280+$1
+    lda #4      ; y=4
+    sta L5280+$2
+    lda #2      ; dy=2
+    sta L5280+$3
+    lda #4      ; x=4
+    sta L5280+$4
+    lda #2      ; dx=3
+    sta L5280+$5
+
+    rts
+
+start_level:
+
+    ; Clear the item/player flags.
+    lda #0
+    sta L5780
+
+    ; Set current room.
+
+    ldx L578a
+    lda start_rooms_y,x
+    sta L5782
+    lda start_rooms_x,x
+    sta L5782+1
+
+    ; Set the player's position.
+
+    jsr reset_player_position		; ok
+
+    ; Reset the weapon counter.
+    lda #0
+    sta L577f
+
+    ; Fill the treasure table with objects.
+    ldx L578a   ; level
+    lda key_rooms,x
+    sta $80
+    
+    ldx L578a   ; level
+    lda seeds,x
+    adc #1
+    and #31
+    sta $7c
+    clc
+    lda seeds,x
+    adc #2
+    and #31
+    sta $7d
+    clc
+
+    lda L578a   ; create an upper limit on the weapon type found in this level
+    adc #2
+    sta L5781
+    clc
+
+    lda #<L5200		; $5200 is objects/treasure level
+    sta $8e
+    lda #>L5200
+    sta $8f
+
+    ldy #0
+    start_level_add_treasure_loop:
+
+        cpy $80                         ; check for the key room
+        bne start_level_add_treasure_item
+
+        lda #5                          ; the value to store is type + 1
+        jmp start_level_add_treasure_store
+
+        start_level_add_treasure_item:
+        clc
+        jsr unlimited_values
+        and #$0f
+        cmp #0
+        beq start_level_add_treasure_none
+
+        clc
+        sta $8c
+        tya
+        adc $8c
+        and #31
+        clc
+        tax
+        lda treasure_table,x
+
+        cmp #4
+        bmi start_level_add_treasure_weapon
+
+        clc
+        adc #1
+        jmp start_level_add_treasure_store
+
+        start_level_add_treasure_weapon:
+
+        ; Only add weapons with types that equal the level number or exceed it
+        ; by one.
+        cmp L5781                     
+        bcs start_level_add_treasure_none
+
+        clc
+        adc #1                              ; store values 0-8 as values 1-9
+        jmp start_level_add_treasure_store
+
+        start_level_add_treasure_none:
+        clc
+        lda #0                  ; do not put treasure in this room
+
+        start_level_add_treasure_store:
+        clc
+        sta ($8e),y             ; add the item to the table
+
+        iny
+        cpy #121
+        bmi start_level_add_treasure_loop
+
+    ; Write the status text.
+	lda #1
+	sta score_nr+1
+
+	ldx #<status_vdu_bytes
+	ldy #>status_vdu_bytes
+	jsr PUTSTRING
+
+    jsr write_score
+
+    clc
+    rts
+
+;-----------------------------
+;Main entry
+;-----------------------------
+main:
+    jsr init
+
+    main_loop:
+
+        jsr show_title
+
+        jsr start_new_game
+
+        level_loop:
+
+            jsr start_level
+
+            game_loop:
+
+                jsr remove_characters
+                jsr reset_unplot_buffer
+                jsr reset_plot_buffer
+
+                lda L5782       ; current room (y)
+                sta $78
+                lda L5782+1       ; current room (x)
+                sta $79
+
+                jsr plot_room
+
+                jsr create_enemy_positions
+                jsr add_treasure
+
+                jsr plot_the_player
+
+                lda #0          ; reset projectile counter
+                sta L578d
+
+                lda #0          ; reset motion counter
+                sta L578e
+
+                lda #63         ; reset generation counter
+                sta L578f
+
+                room_loop:
+                    jsr reset_unplot_buffer
+                    jsr reset_plot_buffer
+
+                    jsr move_characters
+                    jsr move_projectile
+
+                    lda L5780   ; is player out of strength ($40), leaving the
+                    and #$c2    ; level (0x80) or completing the game (0x02)?
+                    beq room_loop_player_move
+                    clc
+
+                    dec L5785           ; leave the loop when the delay
+                    bne room_loop_delay_next
+                    jmp after_room_loop ; counter is about to reset
+
+                    room_loop_delay_next:
+
+                    lda L5280+$1           ; leave the loop when the player demise
+                    cmp #11             ; animation has finished
+                    beq room_loop_after_player_move
+                    clc
+
+                    lda L578e
+                    and #7
+                    bne room_loop_after_player_move
+
+                    lda L5780   ; skip the animation if leaving the level or
+                    and #$82    ; completing the game
+                    bne room_loop_after_player_move
+
+                    ; Show the demise animation when appropriate.
+
+                    lda #<L5280		; $5280
+                    sta $74
+                    lda #>L5280
+                    sta $75
+
+                    jsr unplot_character
+
+                    inc L5280+$1
+                    jsr plot_character
+                    jmp room_loop_after_player_move
+
+                    room_loop_player_move:
+
+                    ; See if it is time to generate a new enemy.
+                    lda L578f
+                    cmp #0
+                    bne no_emerge_characters
+                    jsr emerge_characters
+
+                    no_emerge_characters:
+                    clc
+
+                    jsr check_fire_key
+                    jsr move_player
+                    bcs after_room_loop     ; check if we are leaving the level
+
+                    room_loop_after_player_move:
+                    clc
+
+			jsr $fe66		; wait for vertical sync
+                    jsr plot_buffer
+
+                    ldx #$3b            ; Escape key check
+                    jsr check_key
+                    cpy #255
+                    beq main_loop_play_again
+
+                    ldx #$33            ; S key check
+                    jsr check_key
+                    cpy #255
+                    bne no_set_sound
+
+                    ldx #0
+                    jsr disable_sound
+                    jmp after_sound_checks
+
+                    no_set_sound:
+
+                    ldx #$31            ; Q key check
+                    jsr check_key
+                    cpy #255
+                    bne after_sound_checks
+
+                    ldx #1
+                    jsr disable_sound
+
+                    after_sound_checks:
+
+                    ldx #$30            ; P key check
+                    jsr check_key
+                    cpy #255
+                    bne no_pause
+
+                    pause_loop:
+
+                        ldx #$2f         ; O key check
+                        jsr check_key
+                        cpy #255
+                        bne pause_loop
+
+                    no_pause:
+                    clc
+
+                    lda L578d
+                    cmp #0
+                    beq room_loop_no_update_projectile_counter
+
+                    dec L578d
+
+                    room_loop_no_update_projectile_counter:
+
+                    dec L578f   ; update generation counter
+
+                    inc L578e   ; update motion counter
+                    clc
+                    jmp room_loop
+
+                after_room_loop:
+                clc
+
+                lda L5780
+                and #$80
+                bne exit_level
+
+                lda L5780
+                and #$40
+                bne game_over
+
+                lda L5780
+                and #$02
+                bne complete_game
+
+                jmp game_loop
+
+            exit_level:
+
+            jsr show_end_of_level_screen
+
+            inc L578a
+            clc
+            jmp level_loop
+
+            game_over:
+            jsr show_game_over
+            jmp main_loop_play_again
+
+            complete_game:
+            jsr show_end_of_level_screen
+            jsr show_complete_game
+            jmp main_loop_play_again
+
+        main_loop_play_again:
+	ldx #$80
+        jsr cls
+
+        ; Check the score against the high scores.
+        jsr check_high_scores
+
+        jmp main_loop
+
+    exit:
+	lda #0
+	sta $b000
+	lda #12
+	jsr $fff4
+
+	clc
+    rts

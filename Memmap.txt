@@ -1,0 +1,97 @@
+    # Memory map
+    # 0EE0 enemy x locations in the current room
+    # 0EF0 enemy x locations in the current room
+    # 0F00 completion screen
+    # 1800 title screen
+    # 1E00 CODE
+    #
+    # 3F00 CHARS (character sprites)              BBC   Atom
+    #       4 * 2 * 0x30 (player movement)  3F00  8x24  8x16
+    #           4 * 0x30 (player demise)    4080  8x24  8x16
+    #       4 * 2 * 0x10 (projectile)	    4140  8x 8  8x 8
+    #   5 * 4 * 2 * 0x40 (enemies)          41C0 16x16 12x12
+    #           4 * 0x40 (enemy appear)     4BC0 16x16 12x12
+    #           4 * 0x40 (enemy demise)     4CC0 16x16 12x12
+    #           4 * 0x40 (weapons)          4DC0 16x16 12x12
+    #           5 * 0x40 (treasure)         4EC0 16x16 12x12
+    #           2 * 0x60 (exit)             5000 16x24 12x16
+    #           2 * 0x60 (final exit)       50C0 16x24 12x16
+    #
+    # 0x3f00 + 4*2*0x30 + 4*0x30 + 4*2*0x10 + 5*4*2*0x40 + 4*0x40 + 4*0x40 + 4*0x40 + 5*0x40 + 2*0x60 + 2*0x60
+    #
+    # 5180 high scores (8 * 12 = 0xe0)
+    #   n   3 bytes score + 9 bytes ASCII
+    #
+    # 5200 objects/treasure table (121 entries)
+    #   n   type
+    #
+    # 5279 space
+    # 5280 character table (0x24/6 = 6 entries + 1 special entry)
+    #   n   type (0 missing, 1 player, 2 projectile, 3 explosion,
+    #             4 item,
+    #             8 and higher enemy - bits 4,5,6 are enemy type)
+    #   n+1 counter/direction
+    #       (player: bits 1,2 are direction, bit 0 is animation
+    #        projectile: bits 4,5 are direction, bits 1,2 are type,
+    #                    bit 0 is animation
+    #        enemy:  bits 2,3 are direction, bits 1,0 are animation
+    #                bits 4,5,6,7 are counter for non-homing enemies
+    #        emerging, explosion: bits 4,5,6 are enemy type for emerging,
+    #                             bit 2 is type 0=emerge,1=explode,
+    #                             bits 0,1 are animation
+    #        item: bits 0,1,2,3 are type, bit 2 is weapon/treasure
+    #              0-3 weapons, 4 key, 5-8 treasure)
+    #   n+2 y room offset (0-10)
+    #   n+3 dy (0-3)
+    #   n+4 x room offset (0-10)
+    #   n+5 dx (0-3)
+    #
+    #   first character is always the player
+    #   second character is always the player's weapon
+    #   new characters are added after these
+    #
+    # 5300 plot buffer (alternate unplot/plot entries terminating in 255)
+    #   n       type
+    #   n+1,n+2 source address
+    #   n+3,n+4 destination address
+    #
+    #   5300 and every 12 bytes is unplot entries
+    #   5306 and every 12 bytes is plot entries
+    #
+    # 53C0 space (assuming 8 unplot and 8 plot operations)
+    #
+    # 5400 SPRITES (map)
+    #   3 * (1 * 0x60 (flowers)
+    #        1 * 0x60 (tree)
+    #        1 * 0x60 (tree))
+    #
+    # 5760 note data (8 bytes)
+    #
+    # 577E joystick support (0=off; 1=on)
+    # 577F weapon counter (0=fire one subtile below; 1=fire two subtiles below)
+    # 5780 item/player flags (128=leave level, 64=player demise,
+    #                         bits 4,5,6=enemy limit, 2=complete game,
+    #                         1=has key)
+    # 5781 weapon/enemy limit (the highest weapon/enemy possible on a level)
+    # 5782 current room (i, j)
+    # 5784 lives (strength)
+    # 5785 delay counter
+    # 5786 score (three bytes)
+    # 5789 projectile type
+    # 578A level
+    # 578B palette workspace (enough for one 5 byte palette entry)
+    #       578D is also projectile counter when in a room
+    #       578E is also motion counter when in a room
+    #       578F is also enemy generation counter when in a room
+    #
+    # 579C room data (generated)
+    #   0 blank
+    #   1 flowers/decoration
+    #   2 tree/wall
+    #   3 tree/wall
+    #   4 exit
+    #   5 open exit
+    #   6 final exit (left)
+    #   7 final exit (right)
+    #
+    # 5800 screen memory
